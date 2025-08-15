@@ -19,6 +19,8 @@ cake = ">= 2.1.3 and < 3.0.0"
 cake_sqlight = ">= 1.1.2 and < 2.0.0"
 logging = ">= 1.3.0 and < 2.0.0"
 glenvy = ">= 2.0.1 and < 3.0.0"
+# Switch to official release ASAP
+discord_gleam = { git = "git@github.com:arconyx/discord_gleam", ref="eb9429c" }
 
 [dev-dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"
