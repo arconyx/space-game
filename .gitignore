@@ -3,6 +3,7 @@
 /build
 erl_crash.dump
 .envrc
+.env
 .direnv/
 *.sqlite3
 .vscode/

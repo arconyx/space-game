@@ -6,9 +6,10 @@
 //// *Default: "space-game.sqlite3"* 
 
 import database/database
-import envoy
 import gleam/result
 import gleam/string
+import glenvy/dotenv
+import glenvy/env
 import logging
 
 /// The context holds immutable global state
@@ -18,8 +19,12 @@ pub type Context {
 }
 
 pub fn main() -> Nil {
+  // Load environment variables from .env file
+  let _ = dotenv.load()
+
   let database_path =
-    envoy.get("SPACE_GAME_DATABASE_PATH") |> result.unwrap("space-game.sqlite3")
+    env.string("SPACE_GAME_DATABASE_PATH")
+    |> result.unwrap("space-game.sqlite3")
   let ctx = Context(database_path)
 
   case database.init_database(ctx.db) {
