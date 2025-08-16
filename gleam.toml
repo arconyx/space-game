@@ -19,8 +19,13 @@ cake = ">= 2.1.3 and < 3.0.0"
 cake_sqlight = ">= 1.1.2 and < 2.0.0"
 logging = ">= 1.3.0 and < 2.0.0"
 glenvy = ">= 2.0.1 and < 3.0.0"
-# Switch to official release ASAP
-discord_gleam = { git = "https://github.com/arconyx/discord_gleam.git", ref="eb9429c" }
+stratus = { git = "https://github.com/arconyx/stratus.git", ref = "a006758" }
+gleam_hackney = ">= 1.3.1 and < 2.0.0"
+gleam_http = ">= 4.1.1 and < 5.0.0"
+gleam_erlang = ">= 1.3.0 and < 2.0.0"
+gleam_otp = ">= 1.1.0 and < 2.0.0"
+gleam_json = ">= 3.0.2 and < 4.0.0"
+gramps = ">= 6.0.0 and < 7.0.0"
 
 [dev-dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"
