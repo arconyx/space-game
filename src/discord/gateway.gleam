@@ -11,12 +11,13 @@
 //// Stratus spawns an actor running an event loop we provide. We communicate with the loop
 //// in the normal erlang OTP way - that is by sending messages to it.
 
+import discord/api
+import discord/interactions.{type InteractionEvent}
 import discord/watcher.{type ResumeState}
 import gleam/dynamic/decode.{type Dynamic}
 import gleam/erlang/process.{type Name, type Pid, type Subject}
 import gleam/float
-import gleam/hackney
-import gleam/http/request.{type Request}
+import gleam/http/request
 import gleam/int
 import gleam/json.{type Json}
 import gleam/option.{type Option, None, Some}
@@ -29,11 +30,7 @@ import stratus.{
   type Connection, type InternalMessage, type Message, type Next,
   type SocketReason,
 }
-
-// TODO: Use supervisor to maintain connection
-// Maybe give it a signficant child to host state we want to persist
-// across restarts?
-// Which is all of it to date tbh
+import timing
 
 /// Actions to be performed by the gateway
 ///
@@ -45,6 +42,7 @@ import stratus.{
 pub type GatewayAction {
   Close
   SendHeartbeat
+  IsReady(Subject(Bool))
 }
 
 /// Internal state of the gateway
@@ -59,11 +57,9 @@ pub type GatewayState {
     // we need this for heartbeats as well as resuming
     sequence: Option(Int),
     heartbeat_acknowledged: Bool,
+    ready: Bool,
   )
 }
-
-// TODO: Split start errors into a seperate type
-// TODO: Track ready/resumed state and refuse most instrucitons until ready
 
 type Error {
   JsonParse(json.DecodeError)
@@ -73,67 +69,25 @@ pub type Gateway {
   Gateway(pid: Pid, subject: Subject(InternalMessage(GatewayAction)))
 }
 
-/// Placeholder type for interactions (/commands)
-pub type Interaction {
-  Interaction
-}
-
 /// Everything we need to know to start a gateway
 /// 
 /// The token is a Discord auth token
 /// The handler is a function that accepts and processes interactions (i.e. /commands)
 pub type GatewayBuilder {
   GatewayBuilder(
+    url: String,
     token: String,
-    // TODO: Abstract away connection by hiding it in internal types and interaction functions?
-    // Actually it might not be needed at all if all responses are over http
-    handler: fn(Interaction, Connection) -> Nil,
+    handler: fn(InteractionEvent) -> Nil,
     watcher: Name(watcher.Message),
-  )
-}
-
-/// Set headers on request
-fn annotate_request(req: Request(a)) -> Request(a) {
-  req
-  |> request.set_header(
-    "user-agent",
-    "space-game (https://github.com/arconyx/space-game, v0.json.int(1))",
   )
 }
 
 /// Get websockets address used to connect to Discord
 /// 
 /// Discord supplies the address in the response to a GET
-fn get_websocket_address(resume: Option(ResumeState)) -> Result(String, String) {
-  // TODO: Discord wants us to cache the value locally - use another actor?
-  // Integrate caching directly into here so callers don't have to think about it?
-  case resume {
-    Some(r) -> r.url |> Ok
-    None -> {
-      let req =
-        request.to("https://discord.com/api/v10/gateway")
-        |> result.replace_error("Unable to parse gateway url")
-      use req <- result.try(req)
-      let resp =
-        req
-        |> annotate_request
-        |> hackney.send
-        |> result.map_error(fn(e) {
-          "Gateway address request failed:\n" <> string.inspect(e)
-        })
-      use resp <- result.try(resp)
-
-      case resp.status {
-        200 ->
-          json.parse(resp.body, decode.at(["url"], decode.string))
-          |> result.map_error(fn(e) { "Parsing failed:\n" <> string.inspect(e) })
-        // TODO: Handle other error codes
-        // See https://discord.com/developers/docs/topics/opcodes-and-status-codes#http
-        status ->
-          { "Gateway address errored: " <> int.to_string(status) } |> Error
-      }
-    }
-  }
+pub fn get_websocket_address(token: String) -> Result(String, api.Error) {
+  api.get_with_token(token, "/gateway/bot")
+  |> api.send_and_decode(decode.at(["url"], decode.string))
 }
 
 /// Open a connection to Discord using their Gateway protocol
@@ -144,9 +98,13 @@ pub fn open(gateway: GatewayBuilder) {
   let watcher_subj = process.named_subject(gateway.watcher)
   let resume = process.call(watcher_subj, 100, watcher.Get)
 
-  // Get the url Discord wants us to connect to
-  let url = get_websocket_address(resume) |> result.map_error(actor.InitFailed)
-  use url <- result.try(url)
+  // Get the url Discord wants us to connect to, using the resume
+  // address if set
+  let url = case resume {
+    Some(r) -> r.url
+    None -> gateway.url
+  }
+
   // Gleam chokes on 'ws' and 'wss' prefixes
   // We deliberately upgrade ws/http to wss/https because eww unencrypted connection
   let url =
@@ -159,14 +117,25 @@ pub fn open(gateway: GatewayBuilder) {
       "Unable to parse websocket url " <> url,
     ))
   use req <- result.try(req)
-  let req = req |> annotate_request
+  let req = req |> api.default_headers
 
   logging.log(logging.Debug, "Websocket request ready")
 
   stratus.new_with_initialiser(request: req, init: fn() {
     // We use this to pass messages to the gateway from inside the gateway
     let self: Subject(GatewayAction) = process.new_subject()
-    GatewayState(gateway.token, resume, watcher_subj, self, None, True)
+    let _ =
+      process.spawn(fn() {
+        process.sleep(5000)
+        case process.call(self, 500, IsReady) {
+          True -> logging.log(logging.Debug, "Kill switch disarmed")
+          False -> {
+            logging.log(logging.Warning, "Kill switch triggered")
+            panic
+          }
+        }
+      })
+    GatewayState(gateway.token, resume, watcher_subj, self, None, True, False)
     |> stratus.initialised()
     |> stratus.selecting(process.new_selector() |> process.select(self))
     |> Ok
@@ -204,7 +173,7 @@ fn on_close(state: GatewayState, reason: Option(websocket.CloseReason)) {
         websocket.NotProvided ->
           logging.log(logging.Info, "Gateway closed by Discord without reason")
         websocket.CustomCloseReason(code, _) -> {
-          // TODO: Look into if we need something more fatal than panic
+          // TODO: Panics don't kill the supervisor, so we may want to explicitly kill it
           case code {
             4000 ->
               logging.log(
@@ -305,7 +274,7 @@ fn handle_messages(
   state: GatewayState,
   msg: Message(GatewayAction),
   conn: Connection,
-  interaction_handler: fn(Interaction, Connection) -> Nil,
+  interaction_handler: fn(InteractionEvent) -> Nil,
 ) -> Next(GatewayState, GatewayAction) {
   case msg {
     stratus.Text(text) ->
@@ -335,6 +304,10 @@ fn handle_user_message(
       stratus.stop()
     }
     SendHeartbeat -> beat_heart(state, conn)
+    IsReady(client) -> {
+      process.send(client, state.ready)
+      stratus.continue(state)
+    }
   }
 }
 
@@ -355,14 +328,14 @@ fn handle_text_message(
   state: GatewayState,
   msg: String,
   conn: Connection,
-  interaction_handler: fn(Interaction, Connection) -> Nil,
+  interaction_handler: fn(InteractionEvent) -> Nil,
 ) -> Next(GatewayState, GatewayAction) {
   // logging.log(logging.Debug, "Got message:\n" <> msg)
   case parse_text_message(msg) {
     Ok(Dispatch(data, sequence, name)) -> {
       // Update state in watcher
       process.send(state.watcher, watcher.UpdateSequence(sequence))
-      handle_dispatch(data, name, conn, state.watcher, interaction_handler)
+      handle_dispatch(data, name, state.watcher, interaction_handler)
       // Update sequence for heartbeat purposes
       let state = GatewayState(..state, sequence: Some(sequence))
       stratus.continue(state)
@@ -412,7 +385,8 @@ fn handle_text_message(
       process.spawn(fn() {
         start_pneumatic_heart(state.self, heartbeat_interval)
       })
-      stratus.continue(state)
+      // Ok, so it isn't actually *ready* but it is closed enough
+      stratus.continue(GatewayState(..state, ready: True))
     }
     // Record acknowledge
     Ok(HeartbeatAck) -> {
@@ -471,9 +445,8 @@ fn parse_text_message(msg: String) -> Result(InboundEvent, Error) {
 fn handle_dispatch(
   data: Dynamic,
   name: String,
-  conn: Connection,
   watcher: Subject(watcher.Message),
-  interaction_handler: fn(Interaction, Connection) -> Nil,
+  interaction_handler: fn(InteractionEvent) -> Nil,
 ) -> Nil {
   case name {
     "READY" -> {
@@ -494,25 +467,96 @@ fn handle_dispatch(
       logging.log(logging.Info, "Gateway ready")
     }
     "RESUMED" -> logging.log(logging.Info, "Gateway resumed")
-    // TODO: Actually react to this
+    // This should basically never happen given we have very few reasons to send requests
     "RATE_LIMITED" -> logging.log(logging.Warning, "Rate limit reached")
     "INTERACTION_CREATE" -> {
-      case data_to_interaction(data) {
-        Ok(i) -> interaction_handler(i, conn)
-        Error(e) ->
-          logging.log(
-            logging.Error,
-            "Unable to parse interaction:\n" <> string.inspect(e),
-          )
-      }
+      // Discord requires a response within 3 seconds
+      process_independently(2500, fn() {
+        case interactions.parse_event(data) {
+          Ok(i) -> interaction_handler(i)
+          Error(e) ->
+            logging.log(
+              logging.Error,
+              "Unable to parse interaction:\n" <> string.inspect(e),
+            )
+        }
+      })
+      Nil
     }
     _ -> logging.log(logging.Debug, "Ignoring dispatch event " <> name)
   }
 }
 
-fn data_to_interaction(_data: Dynamic) -> Result(Interaction, Error) {
-  // TODO: Implement parsing
-  Interaction |> Ok
+// TODO: Cache sequence numbers somewhere so we ensure we don't handle them twice if we get them a second time
+
+/// Run interaction handler in an independent process
+///
+/// This immediately spawns an unlinked (independent) process.
+/// This process then creates an inner process to run the handler and traps exists
+/// such that it can handle errors if the `handler` panics. Currently there is no
+/// special error handling beyond logging it but it is planned to return an error message
+/// to Discord to alert the user.
+///
+/// If the process does not run in `timeout` ms it will be stopped. If stopping takes more
+/// than `timeout` ms then it will be killed.
+///
+/// As the outer process is unlinked from the caller this function can panic without
+/// the crash propagating to the caller. This avoids taking down the gateway just because
+/// processing on a single interaction failed.
+///
+/// TODO: Use a dynamic supervisor instead of this hacked together stand-in
+/// TODO: Send error message to Discord on failure. This may take some redesign as we need
+/// the interaction object to send a reply.
+fn process_independently(timeout: Int, handler: fn() -> Nil) -> Pid {
+  use <- process.spawn_unlinked
+  use <- timing.timed("Interaction worker")
+
+  process.trap_exits(True)
+  // start the worker
+  let child = process.spawn(handler)
+
+  // this selector catches exists
+  let exit_selector =
+    process.new_selector()
+    |> process.select_trapped_exits(fn(exit_msg) {
+      case exit_msg.reason {
+        process.Normal | process.Killed -> Nil
+        process.Abnormal(reason) -> {
+          logging.log(
+            logging.Error,
+            "Interaction worker"
+              <> string.inspect(child)
+              <> "failed with reason "
+              <> string.inspect(reason),
+          )
+        }
+      }
+    })
+
+  // run the selector
+  case process.selector_receive(exit_selector, timeout) {
+    // Process has exited
+    Ok(Nil) -> Nil
+    // Timeout reached - order process to shutdown
+    Error(Nil) -> {
+      logging.log(
+        logging.Warning,
+        "Interaction worker " <> string.inspect(child) <> " timed out",
+      )
+      process.send_abnormal_exit(child, "Timeout")
+      // If we're taking too long to shutdown kill it
+      case process.selector_receive(exit_selector, timeout) {
+        Ok(Nil) -> Nil
+        Error(Nil) ->
+          logging.log(logging.Warning, "Killing " <> string.inspect(child))
+      }
+    }
+  }
+
+  logging.log(
+    logging.Debug,
+    "Interaction worker " <> string.inspect(child) <> "exited",
+  )
 }
 
 type OutboundEvent {
@@ -580,8 +624,6 @@ fn send_event(
       |> raw_send_event(conn, 6, _)
   }
 }
-
-// TODO: Send regular heartbeats in a loop
 
 /// Send heartbeat to server
 /// 

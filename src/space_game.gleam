@@ -10,17 +10,14 @@
 //// Discord bot authorisation token
 
 import database/database
-import discord/gatehouse
-import discord/gateway.{type Interaction}
+import discord/bot.{type Bot}
+import discord/interactions.{type InteractionEvent}
 import gleam/erlang/process
-import gleam/otp/actor
-import gleam/otp/static_supervisor
 import gleam/result
 import gleam/string
 import glenvy/dotenv
 import glenvy/env
 import logging
-import stratus.{type Connection}
 
 /// The context holds immutable global state
 /// such as precomputed values derived from environment variables.
@@ -51,45 +48,26 @@ pub fn main() -> Nil {
   }
 
   // Configure bot with environment variables
-  // `discord_gleam.run` is non-terminating so
-  // this needs to be the last thing in the main function
-  let discord_token = env.string("SPACE_GAME_DISCORD_TOKEN")
+  // Panic if we can't read them
+  let assert Ok(discord_token) = env.string("SPACE_GAME_DISCORD_TOKEN")
 
-  case discord_token {
-    // If both tokens are present create the bot
-    Ok(token) -> {
-      let gh = gatehouse.construct(token, handle_command)
-
-      logging.log(logging.Debug, "Gatehouse constructed")
-
-      case static_supervisor.start(gh) {
-        Ok(_) -> logging.log(logging.Info, "Gatehouse started")
-        Error(e) ->
-          case e {
-            actor.InitTimeout ->
-              logging.log(logging.Error, "Gatehouse init timed out")
-            actor.InitFailed(reason) ->
-              logging.log(logging.Error, "Gatehouse init failed: " <> reason)
-            actor.InitExited(reason) ->
-              logging.log(
-                logging.Error,
-                "Gatehouse exited during init: " <> string.inspect(reason),
-              )
-          }
-      }
-    }
-    // If we're missing one environment variable this is a configuration error
-    Error(_) ->
-      logging.log(
-        logging.Warning,
-        "Unable to prepare Discord bot: SPACE_GAME_DISCORD_TOKEN not set",
-      )
-  }
-
+  let assert Ok(_) = bot.start_bot(discord_token, [], command_handler)
   process.sleep_forever()
 }
 
-/// Takes interactions (/commands) and routes them to handler functions
-fn handle_command(_interaction: Interaction, _conn: Connection) -> Nil {
-  Nil
+fn command_handler(bot: Bot, event: InteractionEvent) {
+  case event {
+    interactions.ChatInput(command:, ..) ->
+      case command {
+        ["test"] -> handle_test(bot, event)
+        [] -> logging.log(logging.Warning, "Empty command string")
+        _ -> logging.log(logging.Warning, "Unhandled command")
+      }
+    // _ -> logging.log(logging.Warning, "Unsupported event type")
+  }
+}
+
+fn handle_test(bot: Bot, event: InteractionEvent) {
+  use <- interactions.defer_response(bot, event, False)
+  interactions.ResponseUpdate("Hello world")
 }
