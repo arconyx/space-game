@@ -134,6 +134,7 @@ fn handle_test(bot: Bot, event: InteractionEvent) {
 
 /// Handle the command "/subtest ephemeral"
 fn handle_subtest_ephemeral(bot: Bot, event: InteractionEvent) {
+  // Setting ephemeral to true
   use <- interactions.defer_response(bot, event, True)
   interactions.ResponseUpdate("This is an ephemeral message")
 }

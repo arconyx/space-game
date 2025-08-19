@@ -160,7 +160,7 @@ fn subcommands_to_json(sub: Subcommands) -> Json {
   ]
   case sub {
     SubcommandGroup(_, _, subcommands) -> [
-      #("type", json.int(1)),
+      #("type", json.int(2)),
       #(
         "options",
         non_empty_lists.map(subcommands, subcommands_to_json)
@@ -170,7 +170,7 @@ fn subcommands_to_json(sub: Subcommands) -> Json {
       ..base
     ]
     Subcommand(_, _, required, optional) -> [
-      #("type", json.int(2)),
+      #("type", json.int(1)),
       #("options", options_to_json(required, optional)),
       ..base
     ]
