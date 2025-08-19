@@ -230,3 +230,23 @@ pub fn register_global_commands(
       |> result.replace(Nil)
   }
 }
+
+pub fn register_guild_commands(
+  bot: Bot,
+  guild: String,
+  cmds: List(SlashCommand),
+) -> Result(Nil, api.Error) {
+  case cmds {
+    [] -> Ok(Nil)
+    _ ->
+      list.map(cmds, slash_command_to_json)
+      |> json.preprocessed_array
+      |> api.put(
+        bot,
+        "/applications/" <> bot.id <> "/guilds/" <> guild <> "/commands",
+        _,
+      )
+      |> api.send
+      |> result.replace(Nil)
+  }
+}
