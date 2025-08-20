@@ -5,7 +5,7 @@ import database
 import gleam/dynamic/decode
 import sqlight.{type Connection}
 
-const table = "waypoints"
+pub const table = "waypoints"
 
 /// A waypoint, as represented in the database
 pub type Waypoint {

@@ -21,6 +21,7 @@ import discord/interactions.{type InteractionEvent}
 import gleam/dict
 import gleam/erlang/process
 import gleam/int
+import gleam/list
 import gleam/option.{None, Some}
 import gleam/result
 import gleam/string
@@ -29,6 +30,7 @@ import glenvy/env
 import goods
 import logging
 import player
+import ship
 import sqlight
 import waypoints
 
@@ -115,6 +117,25 @@ fn define_commands() -> List(SlashCommand) {
         ),
       ],
     ),
+    NestedCommand(
+      cmd: "ship",
+      description: "Acquire and control ships",
+      install_context: commands.InstallEverywhere,
+      interaction_contexts: commands.UseInGuildOrUserDM,
+      subcommands: [
+        Subcommand(
+          cmd: "buy",
+          description: "Buy a ship (60,000 credits)",
+          required_options: [
+            commands.StringOpt(
+              name: "name",
+              description: "The name of your ship",
+            ),
+          ],
+          optional_options: [],
+        ),
+      ],
+    ),
   ]
 }
 
@@ -129,7 +150,7 @@ fn command_handler(ctx: Context, bot: Bot, event: InteractionEvent) {
       case command {
         ["account", "register"] -> handle_registration(ctx, bot, event)
         ["account", "balance"] -> handle_balance_check(ctx, bot, event)
-
+        ["ship", "buy"] -> handle_ship_purchase(ctx, bot, event)
         [] -> logging.log(logging.Warning, "Empty command string")
         _ -> logging.log(logging.Warning, "Unhandled command")
       }
@@ -223,12 +244,82 @@ fn handle_balance_check(ctx: Context, bot: Bot, event: InteractionEvent) {
     }
     None ->
       interactions.ResponseUpdate(
-        "Error: We were unable to read your identification papers.",
+        "We were unable to read your identification papers.",
       )
+  }
+}
+
+// Grab user in deferred events
+fn with_user(
+  event: interactions.InteractionEvent,
+  then fun: fn(interactions.User) -> interactions.ResponseUpdate,
+) -> interactions.ResponseUpdate {
+  case event.user {
+    Some(user) -> fun(user)
+    None -> interactions.ResponseUpdate("We cannot identify you.")
+  }
+}
+
+fn handle_ship_purchase(ctx: Context, bot: Bot, event: InteractionEvent) {
+  use <- interactions.defer_response(bot, event, False)
+  use user <- with_user(event)
+  use conn <- database.with_writable_connection(ctx.db)
+  case { waypoints.select_all_waypoints(conn) |> result.map(list.shuffle) } {
+    Ok([]) ->
+      interactions.ResponseUpdate(
+        "There are no waypoints to place your ship at",
+      )
+    Ok([location, ..]) -> {
+      // The assert is safe here because Discord enforces that the option is present.
+      // And if things go wrong and we *do* panic then the only impact is that the command
+      // fails.
+      //
+      // TODO: This option interface kinda sucks, see if we can rewrite options
+      // so we don't have to pattern match on type.
+      // Partition the dict into typed dicts?
+      // Yeah, then we can ditch the Option value wrapper.
+      let assert Ok(interactions.ValueStr(name)) =
+        event.options |> dict.get("name")
+      let new_ship =
+        ship.NewDockedShip(
+          name:,
+          owner_id: user.id,
+          cargo_capacity: 100,
+          speed: 10.0,
+          location:,
+        )
+      let purchase = {
+        use _ <- player.with_cost(conn, user.id, 60_000)
+        ship.insert_ships(conn, [new_ship])
+      }
+      case purchase {
+        Ok(_) -> {
+          logging.log(logging.Debug, "Sold ship to " <> user.id)
+          interactions.ResponseUpdate("Congratulations on your purchase.")
+        }
+        Error(e) -> {
+          logging.log(
+            logging.Error,
+            "Unable to insert ship:\n" <> string.inspect(e),
+          )
+          interactions.ResponseUpdate("Unable to register your ship")
+        }
+      }
+    }
+    Error(e) -> {
+      logging.log(
+        logging.Error,
+        "Unable to fetch waypoints list:\n" <> string.inspect(e),
+      )
+      interactions.ResponseUpdate(
+        "We've lost our maps so we are unable to deliver your ship.",
+      )
+    }
   }
 }
 
 fn define_tables(conn: sqlight.Connection) {
   use _ <- result.try(waypoints.create_waypoints_table(conn))
-  player.create_players_table(conn)
+  use _ <- result.try(player.create_players_table(conn))
+  ship.create_ships_table(conn)
 }

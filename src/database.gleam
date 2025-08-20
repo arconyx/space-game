@@ -83,6 +83,65 @@ pub fn with_writable_connection(
   })
 }
 
+/// Run a sequence of database operations as a single transaction.
+///
+/// If an error is returned the entire transaction is rolled back.
+/// This function returns a nested result, where the outer layer is Ok iff
+/// the change was commit/successfully rolled back and the inner layer
+/// represents if the supplied transaction function succeeded.
+pub fn as_transaction(
+  conn: Connection,
+  transaction: fn() -> Result(a, b),
+) -> Result(Result(a, b), sqlight.Error) {
+  case sqlight.exec("BEGIN", conn) {
+    Ok(_) -> {
+      logging.log(logging.Debug, "Database transaction started")
+      case transaction() {
+        Ok(v) ->
+          case sqlight.exec("COMMIT", conn) {
+            Ok(_) -> {
+              logging.log(logging.Debug, "Database transaction succeeded")
+              Ok(v) |> Ok
+            }
+            Error(ce) -> {
+              logging.log(
+                logging.Error,
+                "Database transaction succeeded but commit failed",
+              )
+              Error(ce)
+            }
+          }
+        Error(e) -> {
+          logging.log(
+            logging.Debug,
+            "Database transaction failed, rolling back",
+          )
+          case sqlight.exec("ROLLBACK", conn) {
+            Ok(_) -> {
+              logging.log(logging.Debug, "Rollback succeeded")
+              e |> Error |> Ok
+            }
+            Error(re) -> {
+              logging.log(
+                logging.Critical,
+                "Rollback failed, database dirty!\nOriginal error was:\n"
+                  <> string.inspect(e)
+                  <> "\nRollback error was:\n"
+                  <> string.inspect(re),
+              )
+              re |> Error
+            }
+          }
+        }
+      }
+    }
+    Error(e) -> {
+      logging.log(logging.Error, "Unable to begin database transaction")
+      Error(e)
+    }
+  }
+}
+
 /// Create the database and init it with inital config
 /// 
 /// This must be safe to call on an existing database.
