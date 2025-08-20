@@ -48,11 +48,12 @@ fn waypoint_to_sql(waypoint: NewWaypoint) -> insert.InsertRow {
   |> insert.row
 }
 
+/// expects [id, name, x, y]
 fn sql_to_waypoint() -> decode.Decoder(Waypoint) {
-  use id <- decode.field("id", decode.int)
-  use name <- decode.field("name", decode.string)
-  use x <- decode.field("x", decode.float)
-  use y <- decode.field("y", decode.float)
+  use id <- decode.field(0, decode.int)
+  use name <- decode.field(1, decode.string)
+  use x <- decode.field(2, decode.float)
+  use y <- decode.field(3, decode.float)
   Waypoint(id:, name:, x:, y:) |> decode.success
 }
 
