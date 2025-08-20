@@ -26,6 +26,8 @@ import gleam/string
 import glenvy/dotenv
 import glenvy/env
 import logging
+import sqlight
+import waypoints
 
 /// The context holds immutable global state
 /// such as precomputed values derived from environment variables.
@@ -68,6 +70,7 @@ pub fn main() -> Nil {
   let assert Ok(guild) = env.string("SPACE_GAME_TEST_GUILD_ID")
   let assert Ok(_) =
     commands.register_guild_commands(bot, guild, define_commands())
+  let _ = waypoints.demo_waypoint(ctx.db)
 
   process.sleep_forever()
 }
@@ -150,6 +153,6 @@ fn handle_subtest_public(bot: Bot, event: InteractionEvent) {
   interactions.ResponseUpdate("This is a normal message")
 }
 
-fn define_tables() {
-  todo
+fn define_tables(conn: sqlight.Connection) {
+  waypoints.create_waypoints_table(conn)
 }
