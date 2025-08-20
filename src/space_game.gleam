@@ -16,10 +16,9 @@
 
 import database
 import discord/bot.{type Bot}
-import discord/commands.{
-  type SlashCommand, NestedCommand, Subcommand, TopLevelCommand,
-}
+import discord/commands.{type SlashCommand, NestedCommand, Subcommand}
 import discord/interactions.{type InteractionEvent}
+import gleam/dict
 import gleam/erlang/process
 import gleam/int
 import gleam/option.{None, Some}
@@ -27,6 +26,7 @@ import gleam/result
 import gleam/string
 import glenvy/dotenv
 import glenvy/env
+import goods
 import logging
 import player
 import sqlight
@@ -35,7 +35,7 @@ import waypoints
 /// The context holds immutable global state
 /// such as precomputed values derived from environment variables.
 pub type Context {
-  Context(db: String)
+  Context(db: String, goods: dict.Dict(String, goods.Goods))
 }
 
 /// Main entry point
@@ -50,7 +50,7 @@ pub fn main() -> Nil {
   let database_path =
     env.string("SPACE_GAME_DATABASE_PATH")
     |> result.unwrap("space-game.sqlite3")
-  let ctx = Context(database_path)
+  let ctx = Context(db: database_path, goods: goods.goods_dict(goods.all_goods))
   // Pass context to all other methods, like the bot, so 
   // they have access to database path and the like.
 
