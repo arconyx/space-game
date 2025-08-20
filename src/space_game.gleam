@@ -6,10 +6,15 @@
 //// Path to sqlite database.
 //// *Default: "space-game.sqlite3"* 
 //// 
-//// ### SPACE_GAME_DISCORD_TOKEN
+//// ## SPACE_GAME_DISCORD_TOKEN
 //// Discord bot authorisation token
+////
+//// ## SPACE_GAME_TEST_GUILD_ID
+//// Server ID used to register guild commands in test code.
+//// Enable dev mode in Discord's advanced settings, then right click
+//// on the server icon to obtain it.
 
-import database/database
+import database
 import discord/bot.{type Bot}
 import discord/commands.{
   type SlashCommand, NestedCommand, Subcommand, TopLevelCommand,
@@ -44,7 +49,7 @@ pub fn main() -> Nil {
   // Pass context to all other methods, like the bot, so 
   // they have access to database path and the like.
 
-  case database.init_database(ctx.db) {
+  case database.init_database(ctx.db, define_tables) {
     Ok(Nil) -> logging.log(logging.Debug, "Database initialised")
     Error(e) ->
       panic as { "Unable to initalise database: " <> string.inspect(e) }
@@ -143,4 +148,8 @@ fn handle_subtest_ephemeral(bot: Bot, event: InteractionEvent) {
 fn handle_subtest_public(bot: Bot, event: InteractionEvent) {
   use <- interactions.defer_response(bot, event, False)
   interactions.ResponseUpdate("This is a normal message")
+}
+
+fn define_tables() {
+  todo
 }
