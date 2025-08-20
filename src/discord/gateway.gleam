@@ -30,7 +30,7 @@ import stratus.{
   type Connection, type InternalMessage, type Message, type Next,
   type SocketReason,
 }
-import timing
+import utils/timing
 
 /// Actions to be performed by the gateway
 ///

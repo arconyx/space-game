@@ -4,7 +4,7 @@ import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
-import non_empty_lists.{type NonEmptyList}
+import utils/non_empty_lists.{type NonEmptyList}
 
 /// The contexts in which the command can be invoked
 pub type InteractionContext {

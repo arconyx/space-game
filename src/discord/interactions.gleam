@@ -14,7 +14,7 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import logging
-import timing
+import utils/timing
 
 /// Discord has a limited set of valid types for command options.
 /// We wrap them as `OptionValue` so that we can stick them all
