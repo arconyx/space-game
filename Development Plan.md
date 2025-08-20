@@ -30,3 +30,12 @@
 ## Miscellaneous
 - Fuel extracted from gas giants
 - Spice and paperclips as tradable goods
+
+# Other Ideas
+
+## FTL
+- Mass Phase Drive: The mass of the ship is dimensionally phased, greatly boosting velocity, and allowing for FTL travel. Default.
+- Subspace generator: The ship is shifted into a subspace bubble, allowing for greater speeds. Average ongoing energy cost, but high initial cost to generate the bubble.
+- Wormhole generator: Requires fixed generators at each end. No energy cost for ship, but typically monetary cost.
+- Fold Teleport Drive: Requires very complex, costly calculations, done prior to jump. Typically slower than other methods, but can be done while docked at a station.
+- Hyperspace Jack: Allows for using hyperspace lines, left by some ancient civilisation. Very fast and cheap, but the lines are rarely conveniently located.
