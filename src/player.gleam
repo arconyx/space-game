@@ -20,9 +20,7 @@ pub type Player {
   Player(discord_id: String, money: Int)
 }
 
-/// Table has an integer primary key and a unique name.
-/// The (x,y) pair must also be unique as no two waypoints
-/// can share the same position.
+/// Table has an String primary key associated with the Discord user id and an integer `money` field.
 pub fn create_players_table(conn: Connection) -> Result(Nil, sqlight.Error) {
   database.create_table(
     conn,
@@ -55,9 +53,9 @@ fn sql_to_player() -> decode.Decoder(Player) {
 /// This will fail if the player is already registered.
 pub fn insert_players(
   conn: Connection,
-  waypoints: List(Player),
+  players: List(Player),
 ) -> Result(List(Player), sqlight.Error) {
-  waypoints
+  players
   |> insert.from_records(table, ["discord_id", "money"], _, player_to_sql)
   |> insert.returning(["discord_id", "money"])
   |> insert.to_query

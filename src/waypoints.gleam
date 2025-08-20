@@ -13,7 +13,7 @@ pub type Waypoint {
 }
 
 /// A waypoint that hasn't been inserted into the database yet
-pub type NewWaypoint {
+type NewWaypoint {
   NewWaypoint(name: String, x: Float, y: Float)
 }
 
