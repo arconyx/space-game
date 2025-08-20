@@ -526,10 +526,7 @@ fn process_independently(timeout: Int, handler: fn() -> Nil) -> Pid {
         process.Abnormal(reason) -> {
           logging.log(
             logging.Error,
-            "Interaction worker"
-              <> string.inspect(child)
-              <> "failed with reason "
-              <> string.inspect(reason),
+            "Interaction worker failed with reason " <> string.inspect(reason),
           )
         }
       }
@@ -555,10 +552,7 @@ fn process_independently(timeout: Int, handler: fn() -> Nil) -> Pid {
     }
   }
 
-  logging.log(
-    logging.Debug,
-    "Interaction worker " <> string.inspect(child) <> "exited",
-  )
+  logging.log(logging.Debug, "Interaction worker exited")
 }
 
 /// Events we send to the server over the gateway
