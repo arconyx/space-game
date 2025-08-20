@@ -1,3 +1,10 @@
+//// Core tools for interacting with the Discord HTTP REST API
+////
+//// Responsibility for constructing and decoding payloads is left to
+//// the caller. Frequently used requests have helper methods defined in
+//// other modules that should be preferred - see `discord/interactions`
+//// in particular.
+
 import discord/types.{type Bot}
 import gleam/dynamic/decode
 import gleam/hackney
@@ -11,8 +18,13 @@ import gleam/result
 import logging
 
 // TODO: Rate limiting
+// I don't think we're ikely to hit it though tbh
 // https://discord.com/developers/docs/topics/rate-limits#rate-limits
 
+/// Apply some default user headers to the request
+///
+/// We don't apply the token here, because this is sometimes called
+/// on unauthenticated endpoints (like opening the websockets connection)
 pub fn default_headers(req: Request(a)) -> Request(a) {
   req
   |> request.set_header(
@@ -22,7 +34,13 @@ pub fn default_headers(req: Request(a)) -> Request(a) {
   |> request.set_header("content-type", "application/json")
 }
 
-/// Construct a request object 
+/// Construct a request object to the Discord API
+///
+/// The endpoint is appended to the base path `https://discord.come/api/v10/`
+/// A leading slash is permissible but optional.
+///
+/// Dedicated constructors are offered for various HTTP methods for convenience
+/// (e.g. `get`).
 pub fn request(
   auth_token token: String,
   method method: Method,
@@ -48,14 +66,12 @@ pub fn request(
   |> request.set_scheme(http.Https)
 }
 
+/// Construct a GET request with no payload
 pub fn get(bot: Bot, endpoint: String) -> Request(String) {
   request(auth_token: bot.token, method: http.Get, endpoint:, payload: None)
 }
 
-pub fn get_with_token(token: String, endpoint: String) -> Request(String) {
-  request(auth_token: token, method: http.Get, endpoint:, payload: None)
-}
-
+// Construct a PUT with the specified payload
 pub fn put(bot: Bot, endpoint: String, payload: Json) -> Request(String) {
   request(
     auth_token: bot.token,
@@ -65,6 +81,7 @@ pub fn put(bot: Bot, endpoint: String, payload: Json) -> Request(String) {
   )
 }
 
+// Construct a POST with the specified payload
 pub fn post(bot: Bot, endpoint: String, payload: Json) -> Request(String) {
   request(
     auth_token: bot.token,
@@ -74,6 +91,7 @@ pub fn post(bot: Bot, endpoint: String, payload: Json) -> Request(String) {
   )
 }
 
+// Construct a PATCH with the specified payload
 pub fn patch(bot: Bot, endpoint: String, payload: Json) -> Request(String) {
   request(
     auth_token: bot.token,
@@ -83,6 +101,9 @@ pub fn patch(bot: Bot, endpoint: String, payload: Json) -> Request(String) {
   )
 }
 
+/// HTTP status codes for unsuccessful requests
+///
+/// Discord documents them [here](https://discord.com/developers/docs/topics/opcodes-and-status-codes#http)
 pub type ErrorCode {
   // 400
   BadRequest
@@ -104,7 +125,7 @@ pub type ErrorCode {
   Unrecognised(Int)
 }
 
-/// Errors when sending requests
+/// Errors when sending or reading requests
 pub type Error {
   Transmission(hackney.Error)
   ResponseCode(ErrorCode)
@@ -112,6 +133,9 @@ pub type Error {
 }
 
 /// Actually send a request to the server
+///
+/// If you are expecting a response back, `send_and_decode` is recommended
+/// for convenient decoding.
 pub fn send(req: Request(String)) -> Result(Response(String), Error) {
   use resp <- result.try(hackney.send(req) |> result.map_error(Transmission))
   case resp.status {
@@ -136,6 +160,7 @@ pub fn send(req: Request(String)) -> Result(Response(String), Error) {
   |> result.map_error(ResponseCode)
 }
 
+/// Send a request to the server then decode the JSON response body
 pub fn send_and_decode(
   req: Request(String),
   decoder: decode.Decoder(a),

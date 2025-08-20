@@ -17,6 +17,7 @@ import discord/watcher.{type ResumeState}
 import gleam/dynamic/decode.{type Dynamic}
 import gleam/erlang/process.{type Name, type Pid, type Subject}
 import gleam/float
+import gleam/http
 import gleam/http/request
 import gleam/int
 import gleam/json.{type Json}
@@ -86,7 +87,7 @@ pub type GatewayBuilder {
 /// 
 /// Discord supplies the address in the response to a GET
 pub fn get_websocket_address(token: String) -> Result(String, api.Error) {
-  api.get_with_token(token, "/gateway/bot")
+  api.request(token, http.Get, "/gateway/bot", None)
   |> api.send_and_decode(decode.at(["url"], decode.string))
 }
 
@@ -442,6 +443,7 @@ fn parse_text_message(msg: String) -> Result(InboundEvent, Error) {
   json.parse(msg, decoder) |> result.map_error(JsonParse)
 }
 
+/// Handle messages with the 0-DISPATCH opcode
 fn handle_dispatch(
   data: Dynamic,
   name: String,
@@ -559,6 +561,9 @@ fn process_independently(timeout: Int, handler: fn() -> Nil) -> Pid {
   )
 }
 
+/// Events we send to the server over the gateway
+///
+/// Interaction responses instead go over the http API
 type OutboundEvent {
   Heartbeat(sequence: Option(Int))
   Identify(token: String)

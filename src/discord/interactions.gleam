@@ -305,6 +305,7 @@ fn cook_interaction(
   |> Ok
 }
 
+/// Send a deferred response notification to the server
 fn send_deferral(
   bot: Bot,
   event: InteractionEvent,
@@ -333,10 +334,17 @@ fn send_deferral(
   |> api.send()
 }
 
+/// An edit to the original interaction response
+///
+/// This is basically a subset of the Discord message object.
+/// The structure is the same as for the [edit webhook endpoint](https://discord.com/developers/docs/resources/webhook#edit-webhook-message)
 pub type ResponseUpdate {
   ResponseUpdate(content: String)
 }
 
+/// Edit the original interaction response
+///
+/// This is commonly used after deferring the response.
 fn edit_response(
   bot: Bot,
   event: InteractionEvent,

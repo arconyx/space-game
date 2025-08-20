@@ -1,3 +1,8 @@
+//// Everything you need to define Discord /slash commands.
+////
+//// When commands are used they trigger interaction events.
+//// See `discord/interactions` for functions to handle these.
+
 import discord/api
 import discord/types.{type Bot}
 import gleam/json.{type Json}
@@ -6,7 +11,12 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import utils/non_empty_lists.{type NonEmptyList}
 
-/// The contexts in which the command can be invoked
+/// The contexts in which a command can be invoked
+///
+/// These are a combination of three boolean values:
+/// - Guilds (servers) for channels in a server
+/// - Bot DMs for DMs between the user and the bot
+/// - User DMs for DMs between users or group DMs
 pub type InteractionContext {
   UseInGuild
   UseInBotDM
@@ -35,8 +45,10 @@ fn interaction_context_to_json(ctx: InteractionContext) -> Json {
 
 /// The context in which a command must be installed to be used,
 /// regardless of where the interaction is occuring.
+///
 /// A guild command requires the bot must be installed to one of the user's guilds.
 /// A user command requires that the bot must be installed by the user.
+///
 /// This does NOT affect where the command can be invoked.
 pub type InstallContext {
   // See InteractionContext for details on why this implementation was chosen
@@ -83,6 +95,8 @@ pub type CommandOption {
   )
 }
 
+/// Partially transform option to JSON.
+/// Just implements the generic fields.
 fn skeleton_opt(
   opt: CommandOption,
   type_: Int,
@@ -96,6 +110,7 @@ fn skeleton_opt(
   ]
 }
 
+/// Prepend an optional value to the list a key-value tuple if the value is not None
 fn push_some_value(ls: List(b), value: Option(a), map: fn(a) -> b) -> List(b) {
   case value {
     Some(v) -> [map(v), ..ls]
@@ -103,6 +118,8 @@ fn push_some_value(ls: List(b), value: Option(a), map: fn(a) -> b) -> List(b) {
   }
 }
 
+/// Convert a key and a value to a key-value tuple after
+/// transforming the value with the encoder
 fn encode_property(key: c, value: a, encoder: fn(a) -> b) -> #(c, b) {
   #(key, encoder(value))
 }
@@ -178,7 +195,11 @@ fn subcommands_to_json(sub: Subcommands) -> Json {
   |> json.object
 }
 
-/// A Discord slash command
+/// A Discord slash command definition
+///
+/// `TopLevelCommand`s represent a command with no subcommands.
+/// `NestedCommand`s should be used if the command has any subcommands.
+/// Discord does not permit the use of the root command if it has any subcommands. 
 pub type SlashCommand {
   TopLevelCommand(
     cmd: String,
@@ -216,6 +237,17 @@ fn slash_command_to_json(cmd: SlashCommand) -> Json {
   |> json.object
 }
 
+/// Register global commands with Discord.
+///
+/// > Global commands are available for every guild that adds your app.
+/// > An individual app's global commands are also available in DMs if
+/// > that app has a bot that shares a mutual guild with the user.
+///
+/// There is a global rate limit of 200 application command creates per day, per guild.
+/// However commands defined though this method should not count towards the rate limit
+/// if they are already registered and their specification is unchanged.
+///
+/// There may be some latency before the new commands become available.
 pub fn register_global_commands(
   bot: Bot,
   cmds: List(SlashCommand),
@@ -231,6 +263,13 @@ pub fn register_global_commands(
   }
 }
 
+/// Register a command to a guild.
+/// 
+/// > Guild commands are specific to the guild you specify when making them.
+/// > Guild commands are not available in DMs.
+///
+/// These are subject to the same rate limits as `register_global_commands`.
+/// They update instantly, which makes then ideal for testing.
 pub fn register_guild_commands(
   bot: Bot,
   guild: String,

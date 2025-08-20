@@ -38,10 +38,10 @@ pub type ResumeState {
 
 /// Messages used to send instructions to the watcher
 /// 
-/// UpdateFromReady: Set resume state from information in the READY event
-/// UpdateSequence: Store latest sequence number
-/// Get: Fetch the latest resume state
-/// Clear: Reset state, preventing resumes
+/// - UpdateFromReady: Set resume state from information in the READY event
+/// - UpdateSequence: Store latest sequence number
+/// - Get: Fetch the latest resume state
+/// - Clear: Reset state, preventing resumes
 pub type Message {
   UpdateFromReady(resume_url: String, session_id: String)
   UpdateSequence(sequence: Int)
