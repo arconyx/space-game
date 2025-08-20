@@ -21,11 +21,14 @@ import discord/commands.{
 }
 import discord/interactions.{type InteractionEvent}
 import gleam/erlang/process
+import gleam/int
+import gleam/option.{None, Some}
 import gleam/result
 import gleam/string
 import glenvy/dotenv
 import glenvy/env
 import logging
+import player
 import sqlight
 import waypoints
 
@@ -64,7 +67,10 @@ pub fn main() -> Nil {
   let assert Ok(bot) =
     // normally we'd pass glboal commands in the second arg but for
     // testing we're using guild args because they update faster
-    bot.start_bot(discord_token, [], command_handler)
+    bot.start_bot(discord_token, [], fn(bot, event) {
+      // embedding the context with a closure
+      command_handler(ctx, bot, event)
+    })
 
   // Test code
   let assert Ok(guild) = env.string("SPACE_GAME_TEST_GUILD_ID")
@@ -80,29 +86,30 @@ pub fn main() -> Nil {
 fn define_commands() -> List(SlashCommand) {
   // TODO: Builder methods to reduce boilerplate
   [
-    TopLevelCommand(
-      cmd: "test",
-      description: "Test command",
-      install_context: commands.InstallEverywhere,
-      interaction_contexts: commands.UseAnywhere,
-      required_options: [],
-      optional_options: [],
-    ),
+    // Replaced by a new version but retained as a demo of top level commands
+    // TopLevelCommand(
+    //   cmd: "register",
+    //   description: "Register as a new player",
+    //   install_context: commands.InstallEverywhere,
+    //   interaction_contexts: commands.UseAnywhere,
+    //   required_options: [],
+    //   optional_options: [],
+    // ),
     NestedCommand(
-      cmd: "subtest",
-      description: "This has subcommands",
+      cmd: "account",
+      description: "Information on your Trader's Guild account",
       install_context: commands.InstallEverywhere,
       interaction_contexts: commands.UseInGuildOrUserDM,
       subcommands: [
         Subcommand(
-          cmd: "ephemeral",
-          description: "This makes an ephemeral message",
+          cmd: "register",
+          description: "Become a guild registered trader",
           required_options: [],
           optional_options: [],
         ),
         Subcommand(
-          cmd: "public",
-          description: "This makes an public message",
+          cmd: "balance",
+          description: "Get your current account balance",
           required_options: [],
           optional_options: [],
         ),
@@ -112,7 +119,7 @@ fn define_commands() -> List(SlashCommand) {
 }
 
 /// Route commands to handler functions
-fn command_handler(bot: Bot, event: InteractionEvent) {
+fn command_handler(ctx: Context, bot: Bot, event: InteractionEvent) {
   case event {
     // Handle /commands
     // This is future proofing against supporting more command types
@@ -120,9 +127,8 @@ fn command_handler(bot: Bot, event: InteractionEvent) {
       // Select a handler by matching on the command
       //  which is a list `["root", "sub1", "sub2", ...]`
       case command {
-        ["test"] -> handle_test(bot, event)
-        ["subtest", "ephemeral"] -> handle_subtest_ephemeral(bot, event)
-        ["subtest", "public"] -> handle_subtest_public(bot, event)
+        ["account", "register"] -> handle_registration(ctx, bot, event)
+        ["account", "balance"] -> handle_balance_check(ctx, bot, event)
 
         [] -> logging.log(logging.Warning, "Empty command string")
         _ -> logging.log(logging.Warning, "Unhandled command")
@@ -130,29 +136,99 @@ fn command_handler(bot: Bot, event: InteractionEvent) {
   }
 }
 
-/// Handle the command "/test"
-fn handle_test(bot: Bot, event: InteractionEvent) {
+/// Register a new player
+fn handle_registration(ctx: Context, bot: Bot, event: InteractionEvent) {
   // Return a "bot is thinking" message
   // The boolean arg is for ephemeral messages (i.e. only visible to the caller)
   use <- interactions.defer_response(bot, event, False)
   // When this block returns the response is updated
   // with the return value
-  interactions.ResponseUpdate("Hello world")
+  case event.user {
+    Some(interactions.User(id, name)) -> {
+      use conn <- database.with_writable_connection(ctx.db)
+      case player.select_player(conn, id) {
+        Ok(Some(_)) ->
+          interactions.ResponseUpdate("You are already a registered trader.")
+        Ok(None) ->
+          case player.insert_players(conn, [player.Player(id, 100_000)]) {
+            Ok(_) ->
+              interactions.ResponseUpdate(
+                "Welcome to the Trader's Guild " <> name <> "!",
+              )
+            Error(e) -> {
+              logging.log(
+                logging.Error,
+                "Unable to register new player:\n" <> string.inspect(e),
+              )
+              interactions.ResponseUpdate(
+                "We apologise "
+                <> name
+                <> ", but our registration software is broken right now.",
+              )
+            }
+          }
+        Error(e) -> {
+          logging.log(
+            logging.Error,
+            "Unable to read player list:\n" <> string.inspect(e),
+          )
+          interactions.ResponseUpdate(
+            "Sorry "
+            <> name
+            <> ", but we can't check the registered traders list right now.",
+          )
+        }
+      }
+    }
+    None ->
+      interactions.ResponseUpdate(
+        "Error: We were unable to read your identification papers.",
+      )
+  }
 }
 
-/// Handle the command "/subtest ephemeral"
-fn handle_subtest_ephemeral(bot: Bot, event: InteractionEvent) {
-  // Setting ephemeral to true
-  use <- interactions.defer_response(bot, event, True)
-  interactions.ResponseUpdate("This is an ephemeral message")
-}
-
-/// Handle the command "/subtest public"
-fn handle_subtest_public(bot: Bot, event: InteractionEvent) {
+/// Print the user's account balance
+fn handle_balance_check(ctx: Context, bot: Bot, event: InteractionEvent) {
+  // Return a "bot is thinking" message
+  // The boolean arg is for ephemeral messages (i.e. only visible to the caller)
   use <- interactions.defer_response(bot, event, False)
-  interactions.ResponseUpdate("This is a normal message")
+  // When this block returns the response is updated
+  // with the return value
+  case event.user {
+    Some(interactions.User(id, name)) -> {
+      use conn <- database.with_readonly_connection(ctx.db)
+      case player.select_player(conn, id) {
+        Ok(Some(player)) ->
+          interactions.ResponseUpdate(
+            "You have "
+            <> int.to_string(player.money)
+            <> " credits in your account.",
+          )
+        Ok(None) ->
+          interactions.ResponseUpdate(
+            "You are not registered with this institution.",
+          )
+        Error(e) -> {
+          logging.log(
+            logging.Error,
+            "Unable to read player list:\n" <> string.inspect(e),
+          )
+          interactions.ResponseUpdate(
+            "Sorry "
+            <> name
+            <> ", but we can't check the registered traders list right now.",
+          )
+        }
+      }
+    }
+    None ->
+      interactions.ResponseUpdate(
+        "Error: We were unable to read your identification papers.",
+      )
+  }
 }
 
 fn define_tables(conn: sqlight.Connection) {
-  waypoints.create_waypoints_table(conn)
+  use _ <- result.try(waypoints.create_waypoints_table(conn))
+  player.create_players_table(conn)
 }

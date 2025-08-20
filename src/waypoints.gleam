@@ -23,7 +23,7 @@ pub type NewWaypoint {
 pub fn create_waypoints_table(conn: Connection) -> Result(Nil, sqlight.Error) {
   database.create_table(
     conn,
-    "waypoints",
+    table,
     database.integer_primary_key,
     [
       database.Column(

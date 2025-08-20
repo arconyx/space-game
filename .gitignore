@@ -6,4 +6,5 @@ erl_crash.dump
 .env
 .direnv/
 *.sqlite3
+*.sqlite3-*
 .vscode/

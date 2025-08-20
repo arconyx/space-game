@@ -16,6 +16,7 @@
 - Info must be transported like cargo
 - Different ship types (speed/cargo tradeoff, fuel efficiency)
 - Resources that can be obtained from a system depend on its planet types
+- Store money on ships instead of on the player (since information is slow)
 
 ## Fancy Stuff
 - Tourism
