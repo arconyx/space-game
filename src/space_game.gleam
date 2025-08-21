@@ -297,6 +297,13 @@ fn handle_ship_purchase(ctx: Context, bot: Bot, event: InteractionEvent) {
           logging.log(logging.Debug, "Sold ship to " <> user.id)
           interactions.ResponseUpdate("Congratulations on your purchase.")
         }
+        Error(player.InsufficentFunds(bal)) -> {
+          interactions.ResponseUpdate(
+            "You cannot afford this right now. Your current balance is "
+            <> int.to_string(bal)
+            <> " credits.",
+          )
+        }
         Error(e) -> {
           logging.log(
             logging.Error,
