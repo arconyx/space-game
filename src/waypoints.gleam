@@ -3,6 +3,7 @@ import cake/insert
 import cake/select
 import database
 import gleam/dynamic/decode
+import gleam/float
 import sqlight.{type Connection}
 
 pub const table = "waypoints"
@@ -85,4 +86,15 @@ pub fn demo_waypoint(db: String) {
   ]
   use conn <- database.with_writable_connection(db)
   insert_waypoints(conn, waypoints)
+}
+
+/// Calculates the magnitude of the distance vector between A and B
+pub fn distance(a: Waypoint, b: Waypoint) -> Float {
+  let dx = a.x -. b.x
+  let dy = a.y -. b.y
+  // errors on negative bases with fractional exponents
+  // or on 0 base with negative exponents
+  // we are doing neither, by construction
+  let assert Ok(dist) = float.square_root(dx *. dx +. dy *. dy)
+  dist
 }

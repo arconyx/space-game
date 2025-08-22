@@ -16,15 +16,19 @@
 
 import database
 import discord/bot.{type Bot}
-import discord/commands.{type SlashCommand, NestedCommand, Subcommand}
+import discord/commands.{
+  type SlashCommand, NestedCommand, Subcommand, TopLevelCommand,
+}
 import discord/interactions.{type InteractionEvent}
 import gleam/dict
 import gleam/erlang/process
+import gleam/float
 import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/result
 import gleam/string
+import gleam/time/duration
 import glenvy/dotenv
 import glenvy/env
 import goods
@@ -83,20 +87,25 @@ pub fn main() -> Nil {
   process.sleep_forever()
 }
 
+fn define_tables(conn: sqlight.Connection) {
+  use _ <- result.try(waypoints.create_waypoints_table(conn))
+  use _ <- result.try(player.create_players_table(conn))
+  ship.create_ships_table(conn)
+}
+
 /// This function just splits out the command definitons from the
 /// main method for readability
 fn define_commands() -> List(SlashCommand) {
   // TODO: Builder methods to reduce boilerplate
   [
-    // Replaced by a new version but retained as a demo of top level commands
-    // TopLevelCommand(
-    //   cmd: "register",
-    //   description: "Register as a new player",
-    //   install_context: commands.InstallEverywhere,
-    //   interaction_contexts: commands.UseAnywhere,
-    //   required_options: [],
-    //   optional_options: [],
-    // ),
+    TopLevelCommand(
+      cmd: "waypoints",
+      description: "List all waypoints",
+      install_context: commands.InstallEverywhere,
+      interaction_contexts: commands.UseAnywhere,
+      required_options: [],
+      optional_options: [],
+    ),
     NestedCommand(
       cmd: "account",
       description: "Information on your Trader's Guild account",
@@ -151,6 +160,7 @@ fn command_handler(ctx: Context, bot: Bot, event: InteractionEvent) {
         ["account", "register"] -> handle_registration(ctx, bot, event)
         ["account", "balance"] -> handle_balance_check(ctx, bot, event)
         ["ship", "buy"] -> handle_ship_purchase(ctx, bot, event)
+        ["waypoints"] -> handle_list_waypoints(ctx, bot, event)
         [] -> logging.log(logging.Warning, "Empty command string")
         _ -> logging.log(logging.Warning, "Unhandled command")
       }
@@ -297,13 +307,14 @@ fn handle_ship_purchase(ctx: Context, bot: Bot, event: InteractionEvent) {
           logging.log(logging.Debug, "Sold ship to " <> user.id)
           interactions.ResponseUpdate("Congratulations on your purchase.")
         }
-        Error(player.InsufficentFunds(bal)) -> {
+        Error(player.InsufficentFunds(bal)) ->
           interactions.ResponseUpdate(
             "You cannot afford this right now. Your current balance is "
             <> int.to_string(bal)
             <> " credits.",
           )
-        }
+        Error(player.PlayerNotFound) ->
+          interactions.ResponseUpdate("You are not a registered trader.")
         Error(e) -> {
           logging.log(
             logging.Error,
@@ -325,8 +336,98 @@ fn handle_ship_purchase(ctx: Context, bot: Bot, event: InteractionEvent) {
   }
 }
 
-fn define_tables(conn: sqlight.Connection) {
-  use _ <- result.try(waypoints.create_waypoints_table(conn))
-  use _ <- result.try(player.create_players_table(conn))
-  ship.create_ships_table(conn)
+fn duration_to_string(dur: duration.Duration) -> String {
+  case duration.to_seconds(dur) {
+    seconds if seconds <. 60.0 ->
+      float.truncate(seconds) |> int.to_string <> " seconds"
+    seconds if seconds <. 3600.0 ->
+      float.truncate(seconds /. 60.0) |> int.to_string <> " minutes"
+    seconds -> {
+      let seconds_string = float.to_string(seconds /. 3600.0)
+      // ugly way to limit the number of decimal places
+      case string.split_once(seconds_string, ",") {
+        Ok(#(integral, decimal)) ->
+          integral
+          <> string.drop_end(decimal, int.max(0, 2 - string.length(decimal)))
+          <> " hours"
+        Error(_) -> seconds_string <> " hours"
+      }
+    }
+  }
+}
+
+fn waypoint_to_string(waypoint: waypoints.Waypoint, ship: ship.Ship) -> String {
+  case ship {
+    ship.DockedShip(location:, ..) ->
+      case location == waypoint {
+        True -> waypoint.name <> " (you are here)"
+        False ->
+          waypoint.name
+          <> " ("
+          <> duration_to_string(ship.waypoint_travel_time(ship, waypoint))
+          <> " away)"
+      }
+    ship.TravellingShip(departed_from:, destination:, ..) ->
+      case waypoint {
+        w if w == destination -> waypoint.name <> " (destination)"
+        w if w == departed_from ->
+          waypoint.name
+          <> " (departed, "
+          <> duration_to_string(ship.waypoint_travel_time(ship, w))
+          <> " away from "
+          <> destination.name
+          <> ")"
+        w ->
+          waypoint.name
+          <> " ("
+          <> duration_to_string(ship.waypoint_travel_time(ship, w))
+          <> ")"
+      }
+  }
+}
+
+fn handle_list_waypoints(ctx: Context, bot: Bot, event: InteractionEvent) {
+  use <- interactions.defer_response(bot, event, False)
+  use conn <- database.with_readonly_connection(ctx.db)
+  let ships =
+    option.map(event.user, fn(u) { ship.select_ships_for_player(conn, u.id) })
+  case waypoints.select_all_waypoints(conn), ships {
+    Ok(all_waypoints), Some(Ok([first_ship, ..])) -> {
+      let waypoint_strings =
+        all_waypoints
+        |> list.map(waypoint_to_string(_, first_ship))
+        |> string.join("\n")
+
+      interactions.ResponseUpdate("### Waypoints:\n" <> waypoint_strings)
+    }
+    Ok(all_waypoints), ship_list -> {
+      case ship_list {
+        Some(Ok([])) -> Nil
+        Some(Ok(ships)) ->
+          logging.log(
+            logging.Error,
+            "Got ships but this should have been caught by the outer case:\n"
+              <> string.inspect(ships),
+          )
+        Some(Error(e)) ->
+          logging.log(
+            logging.Error,
+            "Unable to fetch ships for player:\n" <> string.inspect(e),
+          )
+        None -> Nil
+      }
+      let waypoint_strings =
+        all_waypoints |> list.map(fn(w) { w.name }) |> string.join("\n")
+      interactions.ResponseUpdate("### Waypoints:\n" <> waypoint_strings)
+    }
+    Error(e), _ -> {
+      logging.log(
+        logging.Error,
+        "Unable to fetch waypoint list:\n" <> string.inspect(e),
+      )
+      interactions.ResponseUpdate(
+        "Navigational systems have suffered a critical failure",
+      )
+    }
+  }
 }

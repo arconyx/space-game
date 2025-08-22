@@ -5,14 +5,19 @@ import cake/select
 import cake/where
 import database
 import gleam/dynamic/decode
+import gleam/float
 import gleam/list
 import gleam/option.{None, Some}
+import gleam/time/duration
 import gleam/time/timestamp.{type Timestamp}
 import player
 import sqlight.{type Connection}
 import waypoints.{type Waypoint}
 
 pub const table = "ships"
+
+// intended for debugging use by increasing travel times
+const global_speed_multiplier = 60.0
 
 pub type Ship {
   DockedShip(
@@ -56,7 +61,7 @@ pub fn create_ships_table(conn: Connection) -> Result(Nil, sqlight.Error) {
       database.simple_col("cargo_capacity", database.Integer),
       database.Column(
         name: "speed",
-        datatype: database.Integer,
+        datatype: database.Real,
         nullable: False,
         constraints: "CHECK(speed > 0)",
       ),
@@ -200,7 +205,7 @@ fn make_join(left_col: String, alias: String) {
   join.table(waypoints.table)
   |> join.left(
     where.col(table <> left_col)
-      |> where.eq(where.col(waypoints.table <> ".id")),
+      |> where.eq(where.col(alias <> ".id")),
     alias,
   )
 }
@@ -246,5 +251,42 @@ pub fn select_ships_for_player(
   make_select()
   |> select.where(where.col("owner_id") |> where.eq(where.string(player_id)))
   |> select.to_query
+  |> echo
   |> sqlite.run_read_query(sql_to_ship(), conn)
+}
+
+fn speed(ship: Ship) -> Float {
+  ship.speed *. global_speed_multiplier
+}
+
+/// Calculate how far through a trip a ship is.
+/// Returns an error if the ship is docked.
+// pub fn calculate_progress(ship: Ship) -> Result(Float, Nil) {
+//   case ship {
+//     TravellingShip(departed_at:, departed_from:, destination:, ..) ->
+//       {
+//         let now = timestamp.system_time()
+//         let elapsed = timestamp.difference(now)
+//       }
+//       |> Ok
+//     DockedShip(..) -> Error(Nil)
+//   }
+// }
+
+fn travel_time_for_distance(distance: Float, speed: Float) -> duration.Duration {
+  float.round(distance /. speed *. 3600.0) |> duration.seconds
+}
+
+/// Returns travel time for this ship.
+/// For ships in flight we assume transit from their current destination.
+pub fn waypoint_travel_time(
+  ship: Ship,
+  destination: Waypoint,
+) -> duration.Duration {
+  case ship {
+    DockedShip(location:, ..) -> waypoints.distance(location, destination)
+    TravellingShip(destination:, ..) ->
+      waypoints.distance(destination, destination)
+  }
+  |> travel_time_for_distance(speed(ship))
 }
