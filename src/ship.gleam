@@ -2,14 +2,17 @@ import cake/adapter/sqlite
 import cake/insert
 import cake/join
 import cake/select
+import cake/update
 import cake/where
 import database
 import gleam/dynamic/decode
 import gleam/float
 import gleam/list
 import gleam/option.{None, Some}
+import gleam/result
 import gleam/time/duration
 import gleam/time/timestamp.{type Timestamp}
+import logging
 import player
 import sqlight.{type Connection}
 import waypoints.{type Waypoint}
@@ -17,7 +20,7 @@ import waypoints.{type Waypoint}
 pub const table = "ships"
 
 // intended for debugging use by increasing travel times
-const global_speed_multiplier = 60.0
+const global_speed_multiplier = 1.0
 
 pub type Ship {
   DockedShip(
@@ -251,7 +254,6 @@ pub fn select_ships_for_player(
   make_select()
   |> select.where(where.col("owner_id") |> where.eq(where.string(player_id)))
   |> select.to_query
-  |> echo
   |> sqlite.run_read_query(sql_to_ship(), conn)
 }
 
@@ -261,20 +263,36 @@ fn speed(ship: Ship) -> Float {
 
 /// Calculate how far through a trip a ship is.
 /// Returns an error if the ship is docked.
-// pub fn calculate_progress(ship: Ship) -> Result(Float, Nil) {
-//   case ship {
-//     TravellingShip(departed_at:, departed_from:, destination:, ..) ->
-//       {
-//         let now = timestamp.system_time()
-//         let elapsed = timestamp.difference(now)
-//       }
-//       |> Ok
-//     DockedShip(..) -> Error(Nil)
-//   }
-// }
+pub fn calculate_progress(ship: Ship) -> Result(Float, Nil) {
+  case ship {
+    TravellingShip(departed_at:, departed_from:, destination:, ..) -> {
+      let now = timestamp.system_time()
+      let elapsed = timestamp.difference(now, departed_at)
+      let trip_length =
+        waypoints.distance(departed_from, destination)
+        |> travel_time_for_distance(speed(ship))
+      case duration.to_seconds(trip_length) {
+        0.0 -> Ok(1.0)
+        len -> duration.to_seconds(elapsed) /. len |> Ok
+      }
+    }
+    DockedShip(..) -> Error(Nil)
+  }
+}
 
 fn travel_time_for_distance(distance: Float, speed: Float) -> duration.Duration {
-  float.round(distance /. speed *. 3600.0) |> duration.seconds
+  let l = float.round(distance /. speed *. 3600.0) |> duration.seconds
+  logging.log(
+    logging.Debug,
+    "Calculating speed for distance "
+      <> float.to_string(distance)
+      <> " speed "
+      <> float.to_string(speed)
+      <> " as "
+      <> float.to_string(duration.to_seconds(l))
+      <> " seconds",
+  )
+  l
 }
 
 /// Returns travel time for this ship.
@@ -285,8 +303,72 @@ pub fn waypoint_travel_time(
 ) -> duration.Duration {
   case ship {
     DockedShip(location:, ..) -> waypoints.distance(location, destination)
-    TravellingShip(destination:, ..) ->
-      waypoints.distance(destination, destination)
+    TravellingShip(destination: next, ..) ->
+      waypoints.distance(next, destination)
   }
   |> travel_time_for_distance(speed(ship))
+}
+
+/// Begin flight to waypoint
+pub fn travel_to_waypoint(
+  conn: Connection,
+  ship: Ship,
+  destination: Waypoint,
+) -> Result(Nil, sqlight.Error) {
+  update.new()
+  |> update.table(table)
+  |> update.sets([
+    update.set_int("destination_id", destination.id),
+    update.set_int(
+      "departed_at",
+      timestamp.system_time()
+        |> timestamp.to_unix_seconds
+        |> float.truncate,
+    ),
+  ])
+  |> update.where(where.col("id") |> where.eq(where.int(ship.id)))
+  |> update.to_query
+  |> sqlite.run_write_query(sql_to_ship(), conn)
+  |> result.replace(Nil)
+}
+
+/// Set location to waypoint
+pub fn set_location(
+  conn: Connection,
+  ship: Ship,
+  destination: Waypoint,
+) -> Result(Nil, sqlight.Error) {
+  update.new()
+  |> update.table(table)
+  |> update.sets([
+    update.set_int("location_id", destination.id),
+    update.set_null("destination_id"),
+    update.set_null("departed_at"),
+  ])
+  |> update.where(where.col("id") |> where.eq(where.int(ship.id)))
+  |> update.to_query
+  |> sqlite.run_write_query(sql_to_ship(), conn)
+  |> result.replace(Nil)
+}
+
+fn refresh_ship(conn: Connection, ship: Ship) {
+  case ship, calculate_progress(ship) {
+    TravellingShip(destination:, ..), Ok(p) if p >=. 1.0 ->
+      set_location(conn, ship, destination)
+      |> result.replace(Nil)
+      |> result.replace_error(Nil)
+    _, Ok(_) -> Ok(Nil)
+    _, Error(_) -> Error(Nil)
+  }
+}
+
+/// Update travel status of all ships
+pub fn refresh_all_ships(conn: Connection) {
+  // TODO: This needs optimising
+  // We should be using the db to filter and applying all updates in
+  // one go
+  use ships <- result.try(select_all_ships(conn))
+  ships
+  |> list.map(refresh_ship(conn, _))
+  |> Ok
 }

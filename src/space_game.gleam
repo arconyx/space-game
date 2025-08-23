@@ -29,6 +29,7 @@ import gleam/option.{None, Some}
 import gleam/result
 import gleam/string
 import gleam/time/duration
+import gleam/time/timestamp
 import glenvy/dotenv
 import glenvy/env
 import goods
@@ -83,6 +84,19 @@ pub fn main() -> Nil {
   let assert Ok(_) =
     commands.register_guild_commands(bot, guild, define_commands())
   let _ = waypoints.demo_waypoint(ctx.db)
+
+  let refresh = {
+    use conn <- database.with_writable_connection(ctx.db)
+    ship.refresh_all_ships(conn)
+  }
+  case refresh {
+    Ok(_) -> logging.log(logging.Info, "Ships refreshed")
+    Error(e) ->
+      logging.log(
+        logging.Error,
+        "Unable to refresh ships:\n" <> string.inspect(e),
+      )
+  }
 
   process.sleep_forever()
 }
@@ -143,6 +157,17 @@ fn define_commands() -> List(SlashCommand) {
           ],
           optional_options: [],
         ),
+        Subcommand(
+          cmd: "travel",
+          description: "Fly to a waypoint",
+          required_options: [
+            commands.StringOpt(
+              name: "destination",
+              description: "The name of the destination waypoint",
+            ),
+          ],
+          optional_options: [],
+        ),
       ],
     ),
   ]
@@ -160,6 +185,7 @@ fn command_handler(ctx: Context, bot: Bot, event: InteractionEvent) {
         ["account", "register"] -> handle_registration(ctx, bot, event)
         ["account", "balance"] -> handle_balance_check(ctx, bot, event)
         ["ship", "buy"] -> handle_ship_purchase(ctx, bot, event)
+        ["ship", "travel"] -> handle_travel_start(ctx, bot, event)
         ["waypoints"] -> handle_list_waypoints(ctx, bot, event)
         [] -> logging.log(logging.Warning, "Empty command string")
         _ -> logging.log(logging.Warning, "Unhandled command")
@@ -428,6 +454,79 @@ fn handle_list_waypoints(ctx: Context, bot: Bot, event: InteractionEvent) {
       interactions.ResponseUpdate(
         "Navigational systems have suffered a critical failure",
       )
+    }
+  }
+}
+
+pub fn handle_travel_start(ctx: Context, bot: Bot, event: InteractionEvent) {
+  use <- interactions.defer_response(bot, event, False)
+  use user <- with_user(event)
+  use conn <- database.with_writable_connection(ctx.db)
+  let assert Ok(interactions.ValueStr(name)) =
+    event.options |> dict.get("destination")
+  case
+    waypoints.select_waypoint_by_name(conn, name),
+    ship.select_ships_for_player(conn, user.id)
+  {
+    Ok(Some(waypoint)), Ok([ship, ..]) -> {
+      let time = ship.waypoint_travel_time(ship, waypoint)
+      echo time
+      case ship.travel_to_waypoint(conn, ship, waypoint) {
+        Ok(_) -> {
+          process.spawn_unlinked(fn() {
+            duration.to_seconds(time) *. 1000.0 +. 100.0
+            |> float.ceiling
+            |> float.truncate
+            |> process.sleep
+            use conn <- database.with_writable_connection(ctx.db)
+            case ship.refresh_all_ships(conn) {
+              Ok(_) -> logging.log(logging.Info, "Ships refreshed")
+              Error(e) ->
+                logging.log(
+                  logging.Error,
+                  "Unable to refresh ships:\n" <> string.inspect(e),
+                )
+            }
+          })
+          let arrival =
+            timestamp.system_time()
+            |> timestamp.add(time)
+            |> timestamp.to_unix_seconds
+            |> float.truncate
+            |> int.to_string
+          interactions.ResponseUpdate(
+            "Departing for " <> name <> ". Arriving <t:" <> arrival <> ":R>.",
+          )
+        }
+        Error(e) -> {
+          logging.log(
+            logging.Error,
+            "Unable to start travel:\n" <> string.inspect(e),
+          )
+          interactions.ResponseUpdate(
+            "Engine malfunction! You are stuck in dock.",
+          )
+        }
+      }
+    }
+    Ok(None), _ ->
+      interactions.ResponseUpdate("Unable to find a waypoint called " <> name)
+    _, Ok([]) -> interactions.ResponseUpdate("You don't have any ships")
+    Error(e), _ -> {
+      logging.log(
+        logging.Error,
+        "Unable to fetch waypoint:\n" <> string.inspect(e),
+      )
+      interactions.ResponseUpdate(
+        "Unable to locate that waypoint due to an error.",
+      )
+    }
+    _, Error(e) -> {
+      logging.log(
+        logging.Error,
+        "Unable to fetch ships for player:\n" <> string.inspect(e),
+      )
+      interactions.ResponseUpdate("Unable to fetch your ships.")
     }
   }
 }

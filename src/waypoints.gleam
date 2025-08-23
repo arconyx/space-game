@@ -1,9 +1,13 @@
 import cake/adapter/sqlite
 import cake/insert
 import cake/select
+import cake/where
 import database
 import gleam/dynamic/decode
 import gleam/float
+import gleam/option.{type Option, None, Some}
+import gleam/result
+import logging
 import sqlight.{type Connection}
 
 pub const table = "waypoints"
@@ -77,6 +81,28 @@ pub fn select_all_waypoints(
   |> select.select_cols(["id", "name", "x", "y"])
   |> select.to_query()
   |> sqlite.run_read_query(sql_to_waypoint(), conn)
+}
+
+pub fn select_waypoint_by_name(
+  conn: Connection,
+  name: String,
+) -> Result(Option(Waypoint), sqlight.Error) {
+  select.new()
+  |> select.from_table(table)
+  |> select.select_cols(["id", "name", "x", "y"])
+  |> select.where(where.col("name") |> where.eq(where.string(name)))
+  |> select.to_query()
+  |> sqlite.run_read_query(sql_to_waypoint(), conn)
+  |> result.map(fn(ws) {
+    case ws {
+      [w] -> w |> Some
+      [w, ..] -> {
+        logging.log(logging.Debug, "Got multiple waypoints for name " <> name)
+        w |> Some
+      }
+      [] -> None
+    }
+  })
 }
 
 pub fn demo_waypoint(db: String) {
