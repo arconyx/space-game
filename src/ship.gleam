@@ -267,13 +267,26 @@ pub fn calculate_progress(ship: Ship) -> Result(Float, Nil) {
   case ship {
     TravellingShip(departed_at:, departed_from:, destination:, ..) -> {
       let now = timestamp.system_time()
-      let elapsed = timestamp.difference(now, departed_at)
+      let elapsed = timestamp.difference(departed_at, now)
       let trip_length =
         waypoints.distance(departed_from, destination)
         |> travel_time_for_distance(speed(ship))
       case duration.to_seconds(trip_length) {
         0.0 -> Ok(1.0)
-        len -> duration.to_seconds(elapsed) /. len |> Ok
+        len -> {
+          let elapsed_sec = duration.to_seconds(elapsed)
+          let progress = elapsed_sec /. len
+          logging.log(
+            logging.Debug,
+            "Elapsed time: "
+              <> float.to_string(elapsed_sec)
+              <> "s, trip length: "
+              <> float.to_string(len)
+              <> "s, progress: "
+              <> float.to_string(progress),
+          )
+          Ok(progress)
+        }
       }
     }
     DockedShip(..) -> Error(Nil)
