@@ -27,11 +27,7 @@ pub fn create_players_table(conn: Connection) -> Result(Nil, sqlight.Error) {
   database.create_table(
     conn,
     table,
-    database.PrimaryKeyColumn(
-      name: "discord_id",
-      datatype: database.Text,
-      constraints: "CHECK(discord_id != '')",
-    ),
+    database.string_primary_key("discord_id"),
     [
       database.simple_col("money", database.Integer),
     ],

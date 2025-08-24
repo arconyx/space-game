@@ -200,6 +200,11 @@ pub fn simple_col(name: String, datatype: ColumnType) {
   Column(name:, datatype:, nullable: False, constraints: "")
 }
 
+pub fn string_primary_key(name: String) {
+  { "CHECK(" <> name <> " != '')" }
+  |> PrimaryKeyColumn(name:, datatype: Text, constraints: _)
+}
+
 /// A column with the primary key constraint enforced
 pub type PrimaryKeyColumn {
   PrimaryKeyColumn(name: String, datatype: ColumnType, constraints: String)
