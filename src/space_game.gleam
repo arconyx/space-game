@@ -113,6 +113,7 @@ fn refresh_forever(ctx: Context, period_ms: Int) {
   refresh_forever(ctx, period_ms)
 }
 
+/// Declare database tables
 fn define_tables(conn: sqlight.Connection) {
   use _ <- result.try(waypoints.create_waypoints_table(conn))
   use _ <- result.try(player.create_players_table(conn))
