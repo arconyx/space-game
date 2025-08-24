@@ -87,6 +87,16 @@ pub fn main() -> Nil {
     commands.register_guild_commands(bot, guild, define_commands())
   let _ = waypoints.demo_waypoint(ctx.db)
 
+  process.spawn(fn() { refresh_forever(ctx, 6 * 60 * 1000) })
+
+  process.sleep_forever()
+}
+
+/// Update the status of all ships in flight
+fn refresh_forever(ctx: Context, period_ms: Int) {
+  // TODO: There has to be a better solution than this loop
+  // Refresh after every command, but with a rate limit/cooldown
+  // so we don't do it too often?
   let refresh = {
     use conn <- database.with_writable_connection(ctx.db)
     ship.refresh_all_ships(conn)
@@ -99,8 +109,8 @@ pub fn main() -> Nil {
         "Unable to refresh ships:\n" <> string.inspect(e),
       )
   }
-
-  process.sleep_forever()
+  process.sleep(period_ms)
+  refresh_forever(ctx, period_ms)
 }
 
 fn define_tables(conn: sqlight.Connection) {
