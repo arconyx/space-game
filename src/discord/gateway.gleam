@@ -31,7 +31,6 @@ import stratus.{
   type Connection, type InternalMessage, type Message, type Next,
   type SocketReason,
 }
-import utils/timing
 
 /// Actions to be performed by the gateway
 ///
@@ -473,16 +472,21 @@ fn handle_dispatch(
     "RATE_LIMITED" -> logging.log(logging.Warning, "Rate limit reached")
     "INTERACTION_CREATE" -> {
       // Discord requires a response within 3 seconds
-      process_independently(2500, fn() {
-        case interactions.parse_event(data) {
-          Ok(i) -> interaction_handler(i)
-          Error(e) ->
-            logging.log(
-              logging.Error,
-              "Unable to parse interaction:\n" <> string.inspect(e),
-            )
-        }
-      })
+      interactions.process_independently(
+        2500,
+        "Interaction worker",
+        fn() { Nil },
+        fn() {
+          case interactions.parse_event(data) {
+            Ok(i) -> interaction_handler(i)
+            Error(e) ->
+              logging.log(
+                logging.Error,
+                "Unable to parse interaction:\n" <> string.inspect(e),
+              )
+          }
+        },
+      )
       Nil
     }
     _ -> logging.log(logging.Debug, "Ignoring dispatch event " <> name)
@@ -490,70 +494,6 @@ fn handle_dispatch(
 }
 
 // TODO: Cache sequence numbers somewhere so we ensure we don't handle them twice if we get them a second time
-
-/// Run interaction handler in an independent process
-///
-/// This immediately spawns an unlinked (independent) process.
-/// This process then creates an inner process to run the handler and traps exists
-/// such that it can handle errors if the `handler` panics. Currently there is no
-/// special error handling beyond logging it but it is planned to return an error message
-/// to Discord to alert the user.
-///
-/// If the process does not run in `timeout` ms it will be stopped. If stopping takes more
-/// than `timeout` ms then it will be killed.
-///
-/// As the outer process is unlinked from the caller this function can panic without
-/// the crash propagating to the caller. This avoids taking down the gateway just because
-/// processing on a single interaction failed.
-///
-/// TODO: Use a dynamic supervisor instead of this hacked together stand-in
-/// TODO: Send error message to Discord on failure. This may take some redesign as we need
-/// the interaction object to send a reply.
-fn process_independently(timeout: Int, handler: fn() -> Nil) -> Pid {
-  use <- process.spawn_unlinked
-  use <- timing.timed("Interaction worker")
-
-  process.trap_exits(True)
-  // start the worker
-  let child = process.spawn(handler)
-
-  // this selector catches exists
-  let exit_selector =
-    process.new_selector()
-    |> process.select_trapped_exits(fn(exit_msg) {
-      case exit_msg.reason {
-        process.Normal | process.Killed -> Nil
-        process.Abnormal(reason) -> {
-          logging.log(
-            logging.Error,
-            "Interaction worker failed with reason " <> string.inspect(reason),
-          )
-        }
-      }
-    })
-
-  // run the selector
-  case process.selector_receive(exit_selector, timeout) {
-    // Process has exited
-    Ok(Nil) -> Nil
-    // Timeout reached - order process to shutdown
-    Error(Nil) -> {
-      logging.log(
-        logging.Warning,
-        "Interaction worker " <> string.inspect(child) <> " timed out",
-      )
-      process.send_abnormal_exit(child, "Timeout")
-      // If we're taking too long to shutdown kill it
-      case process.selector_receive(exit_selector, timeout) {
-        Ok(Nil) -> Nil
-        Error(Nil) ->
-          logging.log(logging.Warning, "Killing " <> string.inspect(child))
-      }
-    }
-  }
-
-  logging.log(logging.Debug, "Interaction worker exited")
-}
 
 /// Events we send to the server over the gateway
 ///
