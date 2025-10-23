@@ -2,8 +2,6 @@
 ////
 //// https://discord.com/developers/docs/interactions
 
-import discord/api
-import discord/types.{type Bot}
 import gleam/dict.{type Dict}
 import gleam/dynamic/decode.{type Dynamic}
 import gleam/erlang/process.{type Pid}
@@ -14,6 +12,8 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import logging
+import space_game/discord/api
+import space_game/discord/types.{type Bot}
 import utils/timing
 
 /// Discord has a limited set of valid types for command options.

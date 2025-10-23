@@ -5,7 +5,6 @@
 //// other modules that should be preferred - see `discord/interactions`
 //// in particular.
 
-import discord/types.{type Bot}
 import gleam/dynamic/decode
 import gleam/hackney
 import gleam/http.{type Method}
@@ -16,6 +15,7 @@ import gleam/json.{type Json}
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import logging
+import space_game/discord/types.{type Bot}
 
 // TODO: Rate limiting
 // I don't think we're ikely to hit it though tbh

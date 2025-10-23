@@ -3,12 +3,12 @@
 //// When commands are used they trigger interaction events.
 //// See `discord/interactions` for functions to handle these.
 
-import discord/api
-import discord/types.{type Bot}
 import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
+import space_game/discord/api
+import space_game/discord/types.{type Bot}
 import utils/non_empty_lists.{type NonEmptyList}
 
 /// The contexts in which a command can be invoked

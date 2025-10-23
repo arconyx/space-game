@@ -4,7 +4,6 @@ import cake/join
 import cake/select
 import cake/update
 import cake/where
-import database
 import gleam/dynamic/decode
 import gleam/float
 import gleam/list
@@ -13,9 +12,10 @@ import gleam/result
 import gleam/time/duration
 import gleam/time/timestamp.{type Timestamp}
 import logging
-import player
+import space_game/database
+import space_game/player
+import space_game/waypoints.{type Waypoint}
 import sqlight.{type Connection}
-import waypoints.{type Waypoint}
 
 pub const table = "ships"
 

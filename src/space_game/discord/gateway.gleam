@@ -11,9 +11,6 @@
 //// Stratus spawns an actor running an event loop we provide. We communicate with the loop
 //// in the normal erlang OTP way - that is by sending messages to it.
 
-import discord/api
-import discord/interactions.{type InteractionEvent}
-import discord/watcher.{type ResumeState}
 import gleam/dynamic/decode.{type Dynamic}
 import gleam/erlang/process.{type Name, type Pid, type Subject}
 import gleam/float
@@ -27,6 +24,9 @@ import gleam/result
 import gleam/string
 import gramps/websocket
 import logging
+import space_game/discord/api
+import space_game/discord/interactions.{type InteractionEvent}
+import space_game/discord/watcher.{type ResumeState}
 import stratus.{
   type Connection, type InternalMessage, type Message, type Next,
   type SocketReason,

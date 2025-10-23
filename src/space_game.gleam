@@ -14,14 +14,6 @@
 //// Enable dev mode in Discord's advanced settings, then right click
 //// on the server icon to obtain it.
 
-import database
-import discord/bot.{type Bot}
-import discord/commands.{
-  type SlashCommand, NestedCommand, Subcommand, TopLevelCommand,
-}
-import discord/interactions.{
-  type InteractionEvent, ResponseUpdate, StandaloneResponse,
-}
 import gleam/dict
 import gleam/erlang/process
 import gleam/float
@@ -34,12 +26,20 @@ import gleam/time/duration
 import gleam/time/timestamp
 import glenvy/dotenv
 import glenvy/env
-import goods
 import logging
-import player
-import ship
+import space_game/database
+import space_game/discord/bot.{type Bot}
+import space_game/discord/commands.{
+  type SlashCommand, NestedCommand, Subcommand, TopLevelCommand,
+}
+import space_game/discord/interactions.{
+  type InteractionEvent, ResponseUpdate, StandaloneResponse,
+}
+import space_game/goods
+import space_game/player
+import space_game/ship
+import space_game/waypoints
 import sqlight
-import waypoints
 
 /// The context holds immutable global state
 /// such as precomputed values derived from environment variables.

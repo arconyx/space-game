@@ -1,12 +1,6 @@
 //// Wrap up some other modules to provide a convenient frontend
 //// for starting the bot.
 
-import discord/api
-import discord/commands.{type SlashCommand}
-import discord/gateway
-import discord/interactions.{type InteractionEvent}
-import discord/types
-import discord/watcher
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/http
@@ -16,6 +10,12 @@ import gleam/otp/static_supervisor
 import gleam/otp/supervision
 import gleam/result
 import logging
+import space_game/discord/api
+import space_game/discord/commands.{type SlashCommand}
+import space_game/discord/gateway
+import space_game/discord/interactions.{type InteractionEvent}
+import space_game/discord/types
+import space_game/discord/watcher
 
 pub type Error {
   Gatehouse(actor.StartError)

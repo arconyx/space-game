@@ -3,12 +3,12 @@ import cake/insert
 import cake/select
 import cake/update
 import cake/where
-import database
 import gleam/dynamic/decode
 import gleam/int
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import logging
+import space_game/database
 import sqlight.{type Connection}
 
 pub const table = "players"
