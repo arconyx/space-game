@@ -260,11 +260,7 @@ fn handle_registration(ctx: Context, bot: Bot, event: InteractionEvent) {
 
 /// Print the user's account balance
 fn handle_balance_check(ctx: Context, bot: Bot, event: InteractionEvent) {
-  // Return a "bot is thinking" message
-  // The boolean arg is for ephemeral messages (i.e. only visible to the caller)
   use <- interactions.with_response(bot, event)
-  // When this block returns the response is updated
-  // with the return value
   case event.user {
     Some(interactions.User(id, name)) -> {
       use conn <- database.with_readonly_connection(ctx.db)
@@ -318,7 +314,7 @@ fn with_user(
 fn handle_ship_purchase(ctx: Context, bot: Bot, event: InteractionEvent) {
   // Deferring the response displays a "bot is thinking" message
   // giving us 15 minutes to response instead of a few seconds.
-  use <- interactions.defer_response(bot, event, False)
+  use <- interactions.defer_response(bot, event, ephemeral: False)
   use user <- with_user(event, ResponseUpdate("We couldn't identify you."))
   use conn <- database.with_writable_connection(ctx.db)
   case { waypoints.select_all_waypoints(conn) |> result.map(list.shuffle) } {

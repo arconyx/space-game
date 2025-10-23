@@ -4,7 +4,7 @@
 - Network of waypoints with a basic market at each
 - Each waypoint represents a single solar system with a single trading point and associated market value.
 - Single ship per player with cargo space to transfer goods between waypoints
-- Transit times of real life hours
+- Transit times of real life hours: **DONE**
 - Imperfect information: have to travel to a system to gain market info.
 - Data stored: world info (locations, market info) & player info (assets, ships)
 

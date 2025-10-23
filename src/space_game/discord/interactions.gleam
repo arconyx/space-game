@@ -448,7 +448,7 @@ fn edit_response(
 pub fn defer_response(
   bot: Bot,
   event: InteractionEvent,
-  ephemeral: Bool,
+  ephemeral ephemeral: Bool,
   with fun: fn() -> ResponseUpdate,
 ) -> Nil {
   case send_deferral(bot, event, ephemeral) {
