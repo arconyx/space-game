@@ -2,7 +2,7 @@
 # https://gleam.run/writing-gleam/gleam-toml/.
 
 name = "space_game"
-version = "0.1.0"
+version = "0.2.0"
 
 gleam = ">=1.17.0"
 target = "erlang"
