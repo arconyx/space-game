@@ -70,10 +70,10 @@ fn install_context_to_json(ctx: InstallContext) -> Json {
 /// Options to be included with the command so the user can supply parameters
 ///
 /// # Not Supported
-// - Choices for string/int/num
-// - Restricting channel types
-// - Min/max string length
-// - Autocomplete
+/// - Choices for string/int/num
+/// - Restricting channel types
+/// - Min/max string length
+/// - Autocomplete
 pub type CommandOption {
   StringOpt(name: String, description: String)
   IntegerOpt(

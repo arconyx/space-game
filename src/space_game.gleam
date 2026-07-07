@@ -14,6 +14,7 @@
 //// Enable dev mode in Discord's advanced settings, then right click
 //// on the server icon to obtain it.
 
+import envoy
 import gleam/dict
 import gleam/erlang/process
 import gleam/float
@@ -24,8 +25,6 @@ import gleam/result
 import gleam/string
 import gleam/time/duration
 import gleam/time/timestamp
-import glenvy/dotenv
-import glenvy/env
 import logging
 import space_game/database
 import space_game/discord/bot.{type Bot}
@@ -53,11 +52,8 @@ pub fn main() -> Nil {
   logging.configure()
   logging.set_level(logging.Debug)
 
-  // Load environment variables from .env file
-  let _ = dotenv.load()
-
   let database_path =
-    env.string("SPACE_GAME_DATABASE_PATH")
+    envoy.get("SPACE_GAME_DATABASE_PATH")
     |> result.unwrap("space-game.sqlite3")
   let ctx = Context(db: database_path, goods: goods.goods_dict(goods.all_goods))
   // Pass context to all other methods, like the bot, so 
@@ -71,7 +67,7 @@ pub fn main() -> Nil {
 
   // Configure bot with environment variables
   // Panic if we can't read them
-  let assert Ok(discord_token) = env.string("SPACE_GAME_DISCORD_TOKEN")
+  let assert Ok(discord_token) = envoy.get("SPACE_GAME_DISCORD_TOKEN")
 
   let assert Ok(bot) =
     // normally we'd pass glboal commands in the second arg but for
@@ -82,7 +78,7 @@ pub fn main() -> Nil {
     })
 
   // Test code
-  let assert Ok(guild) = env.string("SPACE_GAME_TEST_GUILD_ID")
+  let assert Ok(guild) = envoy.get("SPACE_GAME_TEST_GUILD_ID")
   let assert Ok(_) =
     commands.register_guild_commands(bot, guild, define_commands())
   let _ = waypoints.demo_waypoint(ctx.db)

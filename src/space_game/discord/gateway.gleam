@@ -22,7 +22,6 @@ import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/result
 import gleam/string
-import gramps/websocket
 import logging
 import space_game/discord/api
 import space_game/discord/interactions.{type InteractionEvent}
@@ -145,17 +144,6 @@ pub fn open(gateway: GatewayBuilder) {
   })
   |> stratus.on_close(on_close)
   |> stratus.start()
-  |> result.map_error(fn(e) {
-    case e {
-      stratus.HandshakeFailed(handshake_error) ->
-        actor.InitFailed(
-          "Handshake failed:\n" <> string.inspect(handshake_error),
-        )
-      stratus.FailedToTransferSocket(reason) ->
-        actor.InitFailed("Socket transfer failed:\n" <> string.inspect(reason))
-      stratus.ActorFailed(start_error) -> start_error
-    }
-  })
   |> result.map(fn(r) {
     logging.log(logging.Debug, "Gateway started")
     r
@@ -166,103 +154,87 @@ pub fn open(gateway: GatewayBuilder) {
 /// 
 /// This function will panic when the close code suggests reconnection should
 /// be avoided.
-fn on_close(state: GatewayState, reason: Option(websocket.CloseReason)) {
+fn on_close(state: GatewayState, reason: stratus.CloseReason) {
   case reason {
-    Some(reason) ->
-      case reason {
-        websocket.NotProvided ->
-          logging.log(logging.Info, "Gateway closed by Discord without reason")
-        websocket.CustomCloseReason(code, _) -> {
-          // TODO: Panics don't kill the supervisor, so we may want to explicitly kill it
-          case code {
-            4000 ->
-              logging.log(
-                logging.Warning,
-                "Discord closed gateway: unknown error",
-              )
-            4001 ->
-              logging.log(
-                logging.Warning,
-                "Discord closed gateway: invalid opcode",
-              )
-            4002 ->
-              logging.log(
-                logging.Warning,
-                "Discord closed gateway: decode error",
-              )
-            4003 ->
-              logging.log(
-                logging.Warning,
-                "Discord closed gateway: not authenticated",
-              )
-            4004 ->
-              logging.log(
-                logging.Warning,
-                "Discord closed gateway: authentication failed",
-              )
-            4005 ->
-              logging.log(
-                logging.Warning,
-                "Discord closed gateway: already authenticated",
-              )
-            4007 ->
-              logging.log(
-                logging.Warning,
-                "Discord closed gateway: invalid sequence",
-              )
-            4008 ->
-              logging.log(
-                logging.Warning,
-                "Discord closed gateway: rate limited",
-              )
-            4009 ->
-              logging.log(logging.Warning, "Discord closed gateway: timed out")
-            4011 -> {
-              logging.log(
-                logging.Critical,
-                "Discord closed gateway: sharding required",
-              )
-              panic as "Sharding required"
-            }
-            4012 -> {
-              logging.log(
-                logging.Critical,
-                "Discord closed gateway: invalid api version",
-              )
-              panic as "Invalid API version"
-            }
-            4013 -> {
-              logging.log(
-                logging.Critical,
-                "Discord closed gateway: invalid intent",
-              )
-              panic as "Invalid intent"
-            }
-            4014 -> {
-              logging.log(
-                logging.Critical,
-                "Discord closed gateway: disallowed intent",
-              )
-              panic as "Disallowed intent"
-            }
-            _ -> {
-              logging.log(
-                logging.Warning,
-                "Discord closed gateway: " <> int.to_string(code),
-              )
-            }
-          }
-        }
-        _ -> {
-          process.send(state.watcher, watcher.Clear)
+    stratus.NotProvided ->
+      logging.log(logging.Info, "Gateway closed by Discord without reason")
+    stratus.Custom(reason) ->
+      // TODO: Panics don't kill the supervisor, so we may want to explicitly kill it
+      case stratus.get_custom_code(reason) {
+        4000 ->
+          logging.log(logging.Warning, "Discord closed gateway: unknown error")
+        4001 ->
+          logging.log(logging.Warning, "Discord closed gateway: invalid opcode")
+        4002 ->
+          logging.log(logging.Warning, "Discord closed gateway: decode error")
+        4003 ->
           logging.log(
-            logging.Info,
-            "Gateway closed by Discord with indication not to resume: "
-              <> string.inspect(reason),
+            logging.Warning,
+            "Discord closed gateway: not authenticated",
+          )
+        4004 ->
+          logging.log(
+            logging.Warning,
+            "Discord closed gateway: authentication failed",
+          )
+        4005 ->
+          logging.log(
+            logging.Warning,
+            "Discord closed gateway: already authenticated",
+          )
+        4007 ->
+          logging.log(
+            logging.Warning,
+            "Discord closed gateway: invalid sequence",
+          )
+        4008 ->
+          logging.log(logging.Warning, "Discord closed gateway: rate limited")
+        4009 ->
+          logging.log(logging.Warning, "Discord closed gateway: timed out")
+        4011 -> {
+          logging.log(
+            logging.Critical,
+            "Discord closed gateway: sharding required",
+          )
+          panic as "Sharding required"
+        }
+        4012 -> {
+          logging.log(
+            logging.Critical,
+            "Discord closed gateway: invalid api version",
+          )
+          panic as "Invalid API version"
+        }
+        4013 -> {
+          logging.log(
+            logging.Critical,
+            "Discord closed gateway: invalid intent",
+          )
+          panic as "Invalid intent"
+        }
+        4014 -> {
+          logging.log(
+            logging.Critical,
+            "Discord closed gateway: disallowed intent",
+          )
+          panic as "Disallowed intent"
+        }
+        code -> {
+          logging.log(
+            logging.Warning,
+            "Discord closed gateway: " <> int.to_string(code),
           )
         }
       }
-    None -> logging.log(logging.Warning, "Gateway closed unexpectedly")
+
+    _ -> {
+      process.send(state.watcher, watcher.Clear)
+      logging.log(
+        logging.Info,
+        "Gateway closed by Discord with indication not to resume: "
+          <> string.inspect(reason),
+      )
+    }
   }
 }
 
@@ -298,8 +270,14 @@ fn handle_user_message(
 ) -> Next(GatewayState, GatewayAction) {
   case msg {
     Close -> {
-      let _ =
-        stratus.close_with_reason(conn, stratus.GoingAway(<<"bot shutdown">>))
+      case stratus.close(conn, stratus.Normal(<<"bot shutdown">>)) {
+        Error(_) ->
+          logging.log(
+            logging.Warning,
+            "Error when sending shutdown event to Discord",
+          )
+        _ -> Nil
+      }
       logging.log(logging.Info, "Gateway stopped due to CLOSE")
       stratus.stop()
     }
@@ -359,7 +337,7 @@ fn handle_text_message(
             logging.Warning,
             "Invalid session reported, full reconnect requested",
           )
-          let _ = stratus.close(conn)
+          let _ = stratus.close(conn, stratus.Normal(<<"invalid session">>))
           process.send(state.watcher, watcher.Clear)
           stratus.stop()
         }
@@ -599,7 +577,10 @@ fn beat_heart(
 }
 
 /// Send heartbeats every interval, with jitter applied to the first instance
-fn start_pneumatic_heart(gateway: Subject(GatewayAction), interval: Int) -> Nil {
+fn start_pneumatic_heart(
+  gateway: Subject(GatewayAction),
+  interval: Int,
+) -> Nil {
   logging.log(
     logging.Debug,
     "Heart started with interval " <> int.to_string(interval) <> "ms",
@@ -650,7 +631,6 @@ fn reconnect_and_resume(conn: Connection) {
   // We can resume so long as the watcher has the correct state, so all we need
   // to do is close the connection and stop the client.
   // we just want a close code that isn't 1000 or 1001
-  let _ =
-    stratus.close_with_reason(conn, stratus.UnexpectedCondition(<<"resuming">>))
+  let _ = stratus.close_custom(conn, 1012, <<"reconnecting and resuming">>)
   stratus.stop()
 }
