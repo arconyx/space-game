@@ -4,7 +4,8 @@
 name = "space_game"
 version = "0.1.0"
 
-target="erlang"
+gleam = ">=1.17.0"
+target = "erlang"
 
 description = "A slow space trading game over Discord"
 licences = ["MIT"]
