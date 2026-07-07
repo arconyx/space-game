@@ -205,7 +205,9 @@ type FlattenedOpts {
 }
 
 /// Transform the Discord command option structure into something better
-fn flatten_options(opts: List(InternalOpt)) -> Result(FlattenedOpts, ParseError) {
+fn flatten_options(
+  opts: List(InternalOpt),
+) -> Result(FlattenedOpts, ParseError) {
   case opts {
     [OptSubcommand(name, children)] | [OptSubcommandGroup(name, children)] -> {
       use inner <- result.try(flatten_options(children))

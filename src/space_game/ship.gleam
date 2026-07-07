@@ -293,7 +293,10 @@ pub fn calculate_progress(ship: Ship) -> Result(Float, Nil) {
   }
 }
 
-fn travel_time_for_distance(distance: Float, speed: Float) -> duration.Duration {
+fn travel_time_for_distance(
+  distance: Float,
+  speed: Float,
+) -> duration.Duration {
   let l = float.round(distance /. speed *. 3600.0) |> duration.seconds
   logging.log(
     logging.Debug,
