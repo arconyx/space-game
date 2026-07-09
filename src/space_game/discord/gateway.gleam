@@ -460,7 +460,8 @@ fn handle_dispatch(
             Error(e) ->
               logging.log(
                 logging.Error,
-                "Unable to parse interaction:\n" <> string.inspect(e),
+                "Unable to parse interaction:\n"
+                  <> interactions.parse_error_to_string(e),
               )
           }
         },

@@ -6,6 +6,7 @@ import gleam/dict.{type Dict}
 import gleam/dynamic/decode.{type Dynamic}
 import gleam/erlang/process.{type Pid}
 import gleam/http/response
+import gleam/int
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -66,12 +67,40 @@ pub type InteractionEvent {
 /// into `InteractionEvents` that will be supplied to user
 /// interaction handlers.
 pub type ParseError {
+  /// See https://docs.discord.com/developers/interactions/receiving-and-responding#interaction-object-interaction-type
   UnsupportedInteraction(Int)
+  /// See https://docs.discord.com/developers/interactions/application-commands#application-command-object-application-command-types
   UnsupportedApplicationCommand(Int)
   DecodeError(List(decode.DecodeError))
+  /// Multiple subcommand / subcommand groups were found in the same options list
   SiblingSubcommands
   /// Discord should always return a user (for DMs) or member (for guilds) field for the invoking user
   MissingUser
+}
+
+pub fn parse_error_to_string(error: ParseError) {
+  case error {
+    UnsupportedInteraction(type_) ->
+      "Unsupported interaction type '" <> int.to_string(type_) <> "'"
+    UnsupportedApplicationCommand(type_) ->
+      "Unsupported application command type '" <> int.to_string(type_) <> "'"
+    DecodeError(decode_errors) ->
+      "Decoder error(s):\n"
+      <> string.join(
+        list.map(decode_errors, fn(error) {
+          "Expected '"
+          <> error.expected
+          <> "' but got '"
+          <> error.found
+          <> "' at path '"
+          <> string.join(error.path, ".")
+          <> "'"
+        }),
+        with: "\n",
+      )
+    SiblingSubcommands -> "Sibling subcommands were found in an options list"
+    MissingUser -> "The identify of the user invoking the command is missing"
+  }
 }
 
 /// Parse an interaction event from a Discord gateway event into our local representation.
