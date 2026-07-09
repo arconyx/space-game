@@ -207,107 +207,75 @@ fn command_handler(ctx: Context, bot: Bot, event: InteractionEvent) {
 
 /// Register a new player
 fn handle_registration(ctx: Context, bot: Bot, event: InteractionEvent) {
-  // TODO: Standardise missing user information (reject it early in processing, we should always have user or member)
   use <- interactions.with_response(bot, event)
   // The return value of this block is used as the response
-  case event.user {
-    Some(interactions.User(id, name)) -> {
-      use conn <- database.with_writable_connection(ctx.db)
-      case player.select_player(conn, id) {
-        Ok(Some(_)) ->
-          StandaloneResponse("You are already a registered trader.", True)
-        Ok(None) ->
-          case player.insert_players(conn, [player.Player(id, 100_000)]) {
-            Ok(_) ->
-              StandaloneResponse(
-                "Welcome to the Trader's Guild " <> name <> "!",
-                False,
-              )
-            Error(e) -> {
-              logging.log(
-                logging.Error,
-                "Unable to register new player:\n" <> string.inspect(e),
-              )
-              StandaloneResponse(
-                "We apologise "
-                  <> name
-                  <> ", but our registration software is broken right now.",
-                True,
-              )
-            }
-          }
+  use conn <- database.with_writable_connection(ctx.db)
+  let user = event.user
+  case player.select_player(conn, user.id) {
+    Ok(Some(_)) ->
+      StandaloneResponse("You are already a registered trader.", True)
+    Ok(None) ->
+      case player.insert_players(conn, [player.Player(user.id, 100_000)]) {
+        Ok(_) ->
+          StandaloneResponse(
+            "Welcome to the Trader's Guild " <> user.name <> "!",
+            False,
+          )
         Error(e) -> {
           logging.log(
             logging.Error,
-            "Unable to read player list:\n" <> string.inspect(e),
+            "Unable to register new player:\n" <> string.inspect(e),
           )
           StandaloneResponse(
-            "Sorry "
-              <> name
-              <> ", but we can't check the registered traders list right now.",
+            "We apologise "
+              <> user.name
+              <> ", but our registration software is broken right now.",
             True,
           )
         }
       }
-    }
-    None ->
+    Error(e) -> {
+      logging.log(
+        logging.Error,
+        "Unable to read player list:\n" <> string.inspect(e),
+      )
       StandaloneResponse(
-        "Error: We were unable to read your identification papers.",
+        "Sorry "
+          <> user.name
+          <> ", but we can't check the registered traders list right now.",
         True,
       )
+    }
   }
 }
 
 /// Print the user's account balance
 fn handle_balance_check(ctx: Context, bot: Bot, event: InteractionEvent) {
   use <- interactions.with_response(bot, event)
-  case event.user {
-    Some(interactions.User(id, name)) -> {
-      use conn <- database.with_readonly_connection(ctx.db)
-      case player.select_player(conn, id) {
-        Ok(Some(player)) ->
-          StandaloneResponse(
-            "You have "
-              <> int.to_string(player.money)
-              <> " credits in your account.",
-            True,
-          )
-        Ok(None) ->
-          StandaloneResponse(
-            "You are not registered with this institution.",
-            True,
-          )
-        Error(e) -> {
-          logging.log(
-            logging.Error,
-            "Unable to read player list:\n" <> string.inspect(e),
-          )
-          StandaloneResponse(
-            "Sorry "
-              <> name
-              <> ", but we can't check the registered traders list right now.",
-            True,
-          )
-        }
-      }
-    }
-    None ->
+  let user = event.user
+  use conn <- database.with_readonly_connection(ctx.db)
+  case player.select_player(conn, user.id) {
+    Ok(Some(player)) ->
       StandaloneResponse(
-        "We were unable to read your identification papers.",
+        "You have "
+          <> int.to_string(player.money)
+          <> " credits in your account.",
         True,
       )
-  }
-}
-
-// Grab user in events
-fn with_user(
-  event: interactions.InteractionEvent,
-  error: a,
-  then fun: fn(interactions.User) -> a,
-) -> a {
-  case event.user {
-    Some(user) -> fun(user)
-    None -> error
+    Ok(None) ->
+      StandaloneResponse("You are not registered with this institution.", True)
+    Error(e) -> {
+      logging.log(
+        logging.Error,
+        "Unable to read player list:\n" <> string.inspect(e),
+      )
+      StandaloneResponse(
+        "Sorry "
+          <> user.name
+          <> ", but we can't check the registered traders list right now.",
+        True,
+      )
+    }
   }
 }
 
@@ -315,7 +283,7 @@ fn handle_ship_purchase(ctx: Context, bot: Bot, event: InteractionEvent) {
   // Deferring the response displays a "bot is thinking" message
   // giving us 15 minutes to response instead of a few seconds.
   use <- interactions.defer_response(bot, event, ephemeral: False)
-  use user <- with_user(event, ResponseUpdate("We couldn't identify you."))
+  let user = event.user
   use conn <- database.with_writable_connection(ctx.db)
   case { waypoints.select_all_waypoints(conn) |> result.map(list.shuffle) } {
     Ok([]) -> ResponseUpdate("There are no waypoints to place your ship at")
@@ -438,14 +406,13 @@ fn handle_list_waypoints(ctx: Context, bot: Bot, event: InteractionEvent) {
   // Get a player's ships, if they have any.
   // This command works even for unregistered players and players without ships
   // so we do special handling for the absence of ships.
-  let ships =
-    option.map(event.user, fn(u) { ship.select_ships_for_player(conn, u.id) })
+  let ships = ship.select_ships_for_player(conn, event.user.id)
   // Grab all the waypoints from the database.
   case waypoints.select_all_waypoints(conn), ships {
     // This is the case where the player has ships
     // We just use the first ship returned for now.
     // TODO: Some way to select ship.
-    Ok(all_waypoints), Some(Ok([first_ship, ..])) -> {
+    Ok(all_waypoints), Ok([first_ship, ..]) -> {
       let waypoint_strings =
         all_waypoints
         |> list.map(waypoint_to_string(_, first_ship))
@@ -456,20 +423,19 @@ fn handle_list_waypoints(ctx: Context, bot: Bot, event: InteractionEvent) {
     // Deal with some edgecases that have similar handling
     Ok(all_waypoints), ship_list -> {
       case ship_list {
-        Some(Ok([])) -> Nil
+        Ok([]) -> Nil
         // This is impossible because of the previous check but the compiler doesn't know that
-        Some(Ok(ships)) ->
+        Ok(ships) ->
           logging.log(
             logging.Error,
             "Got ships but this should have been caught by the outer case:\n"
               <> string.inspect(ships),
           )
-        Some(Error(e)) ->
+        Error(e) ->
           logging.log(
             logging.Error,
             "Unable to fetch ships for player:\n" <> string.inspect(e),
           )
-        None -> Nil
       }
       let waypoint_strings =
         all_waypoints |> list.map(fn(w) { w.name }) |> string.join("\n")
@@ -491,7 +457,7 @@ fn handle_list_waypoints(ctx: Context, bot: Bot, event: InteractionEvent) {
 /// Tell a ship to fly to a waypoint.
 pub fn handle_travel_start(ctx: Context, bot: Bot, event: InteractionEvent) {
   use <- interactions.defer_response(bot, event, True)
-  use user <- with_user(event, ResponseUpdate("We couldn't identify you."))
+  let user = event.user
   use conn <- database.with_writable_connection(ctx.db)
   // TODO: Better option handling
   let assert Ok(interactions.ValueStr(name)) =

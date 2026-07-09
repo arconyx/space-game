@@ -55,7 +55,7 @@ pub type InteractionEvent {
   ChatInput(
     event_id: String,
     continuation_token: String,
-    user: Option(User),
+    user: User,
     command: List(String),
     options: Dict(String, OptionValue),
   )
@@ -70,6 +70,8 @@ pub type ParseError {
   UnsupportedApplicationCommand(Int)
   DecodeError(List(decode.DecodeError))
   SiblingSubcommands
+  /// Discord should always return a user (for DMs) or member (for guilds) field for the invoking user
+  MissingUser
 }
 
 /// Parse an interaction event from a Discord gateway event into our local representation.
@@ -286,17 +288,18 @@ fn cook_interaction(
   let options =
     FlattenedOpts(..options, commands: [raw.root_command, ..options.commands])
   let user = case raw.user, raw.member {
-    Some(user), None | None, Some(user) -> Some(user)
+    Some(user), None | None, Some(user) -> Ok(user)
     Some(_user), Some(member) -> {
       // This violates the Discord spec
       logging.log(
         logging.Warning,
         "Got user and guild member in same interaction",
       )
-      Some(member)
+      Ok(member)
     }
-    None, None -> None
+    None, None -> MissingUser |> Error
   }
+  use user <- result.try(user)
   ChatInput(
     event_id: raw.event_id,
     continuation_token: raw.continuation_token,
