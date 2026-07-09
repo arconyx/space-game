@@ -64,6 +64,7 @@ fn handle_message(state: State, msg: Message) -> Next(State, Message) {
       process.send(client, resp)
       actor.continue(state)
     }
+    // TODO: Why don't we just kill the process so that the gateway is also brought down?
     Clear -> empty |> actor.continue
   }
 }

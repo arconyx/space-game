@@ -616,6 +616,7 @@ fn start_pneumatic_heart(
 /// 
 /// The first request is sent immediately.
 /// Does not return.
+/// TODO: Turn this into a supervised actor
 fn pneumatic_heart(gateway: Subject(GatewayAction), interval: Int) -> Nil {
   process.send(gateway, SendHeartbeat)
   process.sleep(interval)

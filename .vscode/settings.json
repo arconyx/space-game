@@ -1,3 +1,6 @@
 {
-    "git.enabled": false
+    "git.enabled": false,
+    "explorer.autoRevealExclude": {
+        "build/": true
+    }
 }

@@ -89,6 +89,7 @@ pub fn main() -> Nil {
 }
 
 /// Update the status of all ships in flight
+/// TODO: Use a supervised worker
 fn refresh_forever(ctx: Context, period_ms: Int) {
   // TODO: There has to be a better solution than this loop
   // Refresh after every command, but with a rate limit/cooldown
@@ -118,6 +119,8 @@ fn define_tables(conn: sqlight.Connection) {
 
 /// This function just splits out the command definitons from the
 /// main method for readability
+/// TODO: Embed handlers in command objects and automatically generate
+/// router from command list
 fn define_commands() -> List(SlashCommand) {
   // TODO: Builder methods to reduce boilerplate
   [
@@ -204,6 +207,7 @@ fn command_handler(ctx: Context, bot: Bot, event: InteractionEvent) {
 
 /// Register a new player
 fn handle_registration(ctx: Context, bot: Bot, event: InteractionEvent) {
+  // TODO: Standardise missing user information (reject it early in processing, we should always have user or member)
   use <- interactions.with_response(bot, event)
   // The return value of this block is used as the response
   case event.user {
