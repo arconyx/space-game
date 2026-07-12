@@ -77,21 +77,36 @@ pub fn main() -> Nil {
   // Panic if we can't read them
   let assert Ok(discord_id) = envoy.get("SPACE_GAME_DISCORD_APP_ID")
   let assert Ok(discord_token) = envoy.get("SPACE_GAME_DISCORD_TOKEN")
-  let assert Ok(guild) = envoy.get("SPACE_GAME_TEST_GUILD_ID")
+  let assert Ok(guild_id) = envoy.get("SPACE_GAME_TEST_GUILD_ID")
 
   let assert Ok(Nil) =
-    // normally we'd pass glboal commands in the second arg but for
-    // testing we're using guild args because they update faster
-    bot.start_bot(
-      discord_id,
-      discord_token,
-      [],
-      [#(guild, define_commands())] |> dict.from_list,
-      fn(bot, event) {
-        // embedding the context with a closure
-        command_handler(ctx, bot, event)
-      },
-    )
+    bot.start_bot(discord_id, discord_token, fn(bot, event) {
+      // embedding the context with a closure
+      command_handler(ctx, bot, event)
+    })
+
+  let bot = api.new(id: discord_id, token: discord_token)
+
+  // Normally we'd register global commands but for testing 
+  // we're using guild args because they update faster and
+  // don't have a quota
+  let assert Ok(_) =
+    commands.register_global_commands(bot, [])
+    |> result.map_error(fn(e) {
+      "Unable to register global commands due to error:\n"
+      <> api.error_to_string(e)
+    })
+  logging.log(logging.Debug, "Global commands registered")
+
+  let assert Ok(_) =
+    commands.register_guild_commands(bot, guild_id, define_commands())
+    |> result.map_error(fn(e) {
+      "Unable to register guild commands for guild "
+      <> guild_id
+      <> " due to error:\n"
+      <> api.error_to_string(e)
+    })
+  logging.log(logging.Debug, "Guild commands registered for guild " <> guild_id)
 
   let _ = waypoints.demo_waypoint(ctx.db)
 

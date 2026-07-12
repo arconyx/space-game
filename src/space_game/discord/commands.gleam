@@ -245,6 +245,8 @@ fn slash_command_to_json(cmd: SlashCommand) -> Json {
 /// There is a global rate limit of 200 application command creates per day, per guild.
 /// However commands defined though this method should not count towards the rate limit
 /// if they are already registered and their specification is unchanged.
+/// 
+/// Registering an empty list is a no-op.
 ///
 /// There may be some latency before the new commands become available.
 pub fn register_global_commands(
@@ -269,6 +271,8 @@ pub fn register_global_commands(
 ///
 /// These are subject to the same rate limits as `register_global_commands`.
 /// They update instantly, which makes then ideal for testing.
+/// 
+/// Registering an empty list is a no-op.
 pub fn register_guild_commands(
   bot: Bot,
   guild: String,

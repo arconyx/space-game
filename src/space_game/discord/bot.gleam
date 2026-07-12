@@ -1,7 +1,6 @@
 //// Wrap up some other modules to provide a convenient frontend
 //// for starting the bot.
 
-import gleam/dict.{type Dict}
 import gleam/erlang/process
 import gleam/otp/actor
 import gleam/otp/static_supervisor
@@ -9,7 +8,6 @@ import gleam/otp/supervision
 import gleam/result
 import logging
 import space_game/discord/api.{type Bot}
-import space_game/discord/commands.{type SlashCommand}
 import space_game/discord/gateway
 import space_game/discord/interactions.{type InteractionEvent}
 import space_game/discord/watcher
@@ -27,8 +25,6 @@ pub type Error {
 pub fn start_bot(
   id: String,
   token: String,
-  global_commands: List(SlashCommand),
-  guild_commands: Dict(String, List(SlashCommand)),
   command_handler: fn(Bot, InteractionEvent) -> Nil,
 ) -> Result(Nil, Error) {
   // Now we have the ID we can construct the bot object
@@ -49,34 +45,6 @@ pub fn start_bot(
     static_supervisor.start(gh) |> result.map_error(Gatehouse),
   )
   logging.log(logging.Info, "Gatehouse started")
-
-  // If we're connected then try register global commands
-  // There's a quota on creating there (200/day) so we
-  // give the early sections a chance to fail before we use any.
-  // Existing, unchanged, commands should not count towards the quota.
-  use _ <- result.try(
-    commands.register_global_commands(bot, global_commands)
-    |> result.map_error(API),
-  )
-  logging.log(logging.Debug, "Global commands registered")
-  guild_commands
-  |> dict.each(fn(guild_id, commands) {
-    case commands.register_guild_commands(bot, guild_id, commands) {
-      Ok(_) ->
-        logging.log(
-          logging.Debug,
-          "Guild commands registered for guild " <> guild_id,
-        )
-      Error(e) ->
-        logging.log(
-          logging.Error,
-          "Unable to register guild commands for guild "
-            <> guild_id
-            <> " due to error:\n"
-            <> api.error_to_string(e),
-        )
-    }
-  })
 
   Ok(Nil)
 }
