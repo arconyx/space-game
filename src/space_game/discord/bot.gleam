@@ -7,7 +7,7 @@ import gleam/otp/static_supervisor
 import gleam/otp/supervision
 import gleam/result
 import logging
-import space_game/discord/api.{type Bot}
+import space_game/discord/api
 import space_game/discord/gateway
 import space_game/discord/interactions.{type InteractionEvent}
 import space_game/discord/watcher
@@ -23,19 +23,13 @@ pub type Error {
 /// which mantains a connection to the Discord gateway over
 /// which we receive messages.
 pub fn start_bot(
-  id: String,
   token: String,
-  command_handler: fn(Bot, InteractionEvent) -> Nil,
+  command_handler: fn(InteractionEvent) -> Nil,
 ) -> Result(Nil, Error) {
-  // Now we have the ID we can construct the bot object
-  // We'll be embedding this into the command handler so we access
-  // when dealing with interactions.
-  let bot = api.new(id:, token:)
-
   // Prepare the gatehouse, responsible for managing the processes
   // that listen for Discord events
   use gh <- result.try(
-    construct(token, fn(event) { command_handler(bot, event) })
+    construct(token, fn(event) { command_handler(event) })
     |> result.map_error(API),
   )
   logging.log(logging.Debug, "Gatehouse constructed")

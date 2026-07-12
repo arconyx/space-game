@@ -34,7 +34,7 @@ import gleam/time/duration
 import gleam/time/timestamp
 import logging
 import space_game/database
-import space_game/discord/api.{type Bot}
+import space_game/discord/api
 import space_game/discord/bot
 import space_game/discord/commands.{
   type SlashCommand, NestedCommand, Subcommand, TopLevelCommand,
@@ -51,7 +51,7 @@ import sqlight
 /// The context holds immutable global state
 /// such as precomputed values derived from environment variables.
 pub type Context {
-  Context(db: String, goods: dict.Dict(String, goods.Goods))
+  Context(bot: api.Bot, db: String, goods: dict.Dict(String, goods.Goods))
 }
 
 /// Main entry point
@@ -60,38 +60,37 @@ pub fn main() -> Nil {
   logging.configure()
   logging.set_level(logging.Debug)
 
+  // Load configuration from environment. Most panic if we can't read them
   let database_path =
     envoy.get("SPACE_GAME_DATABASE_PATH")
     |> result.unwrap("space-game.sqlite3")
-  let ctx = Context(db: database_path, goods: goods.goods_dict(goods.all_goods))
-  // Pass context to all other methods, like the bot, so 
-  // they have access to database path and the like.
+  let assert Ok(discord_id) = envoy.get("SPACE_GAME_DISCORD_APP_ID")
+  let assert Ok(discord_token) = envoy.get("SPACE_GAME_DISCORD_TOKEN")
+  let assert Ok(guild_id) = envoy.get("SPACE_GAME_TEST_GUILD_ID")
+  let ctx =
+    Context(
+      bot: api.new(id: discord_id, token: discord_token),
+      db: database_path,
+      goods: goods.goods_dict(goods.all_goods),
+    )
 
-  case database.init_database(ctx.db, define_tables) {
+  case database.init_database(database_path, define_tables) {
     Ok(Nil) -> logging.log(logging.Debug, "Database initialised")
     Error(e) ->
       panic as { "Unable to initalise database: " <> string.inspect(e) }
   }
 
-  // Configure bot with environment variables
-  // Panic if we can't read them
-  let assert Ok(discord_id) = envoy.get("SPACE_GAME_DISCORD_APP_ID")
-  let assert Ok(discord_token) = envoy.get("SPACE_GAME_DISCORD_TOKEN")
-  let assert Ok(guild_id) = envoy.get("SPACE_GAME_TEST_GUILD_ID")
-
   let assert Ok(Nil) =
-    bot.start_bot(discord_id, discord_token, fn(bot, event) {
-      // embedding the context with a closure
-      command_handler(ctx, bot, event)
+    bot.start_bot(discord_token, fn(event) {
+      // embedding the context + bot with a closure
+      command_handler(ctx, event)
     })
-
-  let bot = api.new(id: discord_id, token: discord_token)
 
   // Normally we'd register global commands but for testing 
   // we're using guild args because they update faster and
   // don't have a quota
   let assert Ok(_) =
-    commands.register_global_commands(bot, [])
+    commands.register_global_commands(ctx.bot, [])
     |> result.map_error(fn(e) {
       "Unable to register global commands due to error:\n"
       <> api.error_to_string(e)
@@ -99,7 +98,7 @@ pub fn main() -> Nil {
   logging.log(logging.Debug, "Global commands registered")
 
   let assert Ok(_) =
-    commands.register_guild_commands(bot, guild_id, define_commands())
+    commands.register_guild_commands(ctx.bot, guild_id, define_commands())
     |> result.map_error(fn(e) {
       "Unable to register guild commands for guild "
       <> guild_id
@@ -213,7 +212,7 @@ fn define_commands() -> List(SlashCommand) {
 }
 
 /// Route commands to handler functions
-fn command_handler(ctx: Context, bot: Bot, event: InteractionEvent) {
+fn command_handler(ctx: Context, event: InteractionEvent) {
   case event {
     // Handle /commands
     // This is future proofing against supporting more command types
@@ -221,11 +220,11 @@ fn command_handler(ctx: Context, bot: Bot, event: InteractionEvent) {
       // Select a handler by matching on the command
       //  which is a list `["root", "sub1", "sub2", ...]`
       case command {
-        ["account", "register"] -> handle_registration(ctx, bot, event)
-        ["account", "balance"] -> handle_balance_check(ctx, bot, event)
-        ["ship", "buy"] -> handle_ship_purchase(ctx, bot, event)
-        ["ship", "travel"] -> handle_travel_start(ctx, bot, event)
-        ["waypoints"] -> handle_list_waypoints(ctx, bot, event)
+        ["account", "register"] -> handle_registration(ctx, event)
+        ["account", "balance"] -> handle_balance_check(ctx, event)
+        ["ship", "buy"] -> handle_ship_purchase(ctx, event)
+        ["ship", "travel"] -> handle_travel_start(ctx, event)
+        ["waypoints"] -> handle_list_waypoints(ctx, event)
         [] -> logging.log(logging.Warning, "Empty command string")
         _ -> logging.log(logging.Warning, "Unhandled command")
       }
@@ -233,8 +232,8 @@ fn command_handler(ctx: Context, bot: Bot, event: InteractionEvent) {
 }
 
 /// Register a new player
-fn handle_registration(ctx: Context, bot: Bot, event: InteractionEvent) {
-  use <- interactions.with_response(bot, event)
+fn handle_registration(ctx: Context, event: InteractionEvent) {
+  use <- interactions.with_response(ctx.bot, event)
   // The return value of this block is used as the response
   use conn <- database.with_writable_connection(ctx.db)
   let user = event.user
@@ -277,8 +276,8 @@ fn handle_registration(ctx: Context, bot: Bot, event: InteractionEvent) {
 }
 
 /// Print the user's account balance
-fn handle_balance_check(ctx: Context, bot: Bot, event: InteractionEvent) {
-  use <- interactions.with_response(bot, event)
+fn handle_balance_check(ctx: Context, event: InteractionEvent) {
+  use <- interactions.with_response(ctx.bot, event)
   let user = event.user
   use conn <- database.with_readonly_connection(ctx.db)
   case player.select_player(conn, user.id) {
@@ -306,10 +305,10 @@ fn handle_balance_check(ctx: Context, bot: Bot, event: InteractionEvent) {
   }
 }
 
-fn handle_ship_purchase(ctx: Context, bot: Bot, event: InteractionEvent) {
+fn handle_ship_purchase(ctx: Context, event: InteractionEvent) {
   // Deferring the response displays a "bot is thinking" message
   // giving us 15 minutes to response instead of a few seconds.
-  use <- interactions.defer_response(bot, event, ephemeral: False)
+  use <- interactions.defer_response(ctx.bot, event, ephemeral: False)
   let user = event.user
   use conn <- database.with_writable_connection(ctx.db)
   case { waypoints.select_all_waypoints(conn) |> result.map(list.shuffle) } {
@@ -427,8 +426,8 @@ fn waypoint_to_string(waypoint: waypoints.Waypoint, ship: ship.Ship) -> String {
 }
 
 /// Print a list of waypoints with travel time information
-fn handle_list_waypoints(ctx: Context, bot: Bot, event: InteractionEvent) {
-  use <- interactions.defer_response(bot, event, True)
+fn handle_list_waypoints(ctx: Context, event: InteractionEvent) {
+  use <- interactions.defer_response(ctx.bot, event, True)
   use conn <- database.with_readonly_connection(ctx.db)
   // Get a player's ships, if they have any.
   // This command works even for unregistered players and players without ships
@@ -482,8 +481,8 @@ fn handle_list_waypoints(ctx: Context, bot: Bot, event: InteractionEvent) {
 }
 
 /// Tell a ship to fly to a waypoint.
-pub fn handle_travel_start(ctx: Context, bot: Bot, event: InteractionEvent) {
-  use <- interactions.defer_response(bot, event, True)
+pub fn handle_travel_start(ctx: Context, event: InteractionEvent) {
+  use <- interactions.defer_response(ctx.bot, event, True)
   let user = event.user
   use conn <- database.with_writable_connection(ctx.db)
   // TODO: Better option handling
