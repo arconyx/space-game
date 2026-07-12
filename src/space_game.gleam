@@ -28,6 +28,7 @@ import gleam/float
 import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
+import gleam/otp/static_supervisor
 import gleam/result
 import gleam/string
 import gleam/time/duration
@@ -80,11 +81,16 @@ pub fn main() -> Nil {
       panic as { "Unable to initalise database: " <> string.inspect(e) }
   }
 
-  let assert Ok(Nil) =
-    bot.start_bot(discord_token, fn(event) {
+  let assert Ok(bot_supervisor) =
+    bot.create(discord_token, fn(event) {
       // embedding the context + bot with a closure
       command_handler(ctx, event)
     })
+
+  let assert Ok(_) =
+    static_supervisor.new(static_supervisor.OneForOne)
+    |> static_supervisor.add(static_supervisor.supervised(bot_supervisor))
+    |> static_supervisor.start()
 
   // Normally we'd register global commands but for testing 
   // we're using guild args because they update faster and
