@@ -46,14 +46,16 @@ pub type GatewayAction {
 }
 
 /// Internal state of the gateway
-pub type GatewayState {
+type GatewayState {
   GatewayState(
     token: String,
     persistent_state: PersistentState,
     self: Subject(GatewayAction),
     // we need this for heartbeats as well as resuming
     sequence: Option(Int),
-    heartbeat_acknowledged: Bool,
+    heartbeat_interval_ms: Option(Int),
+    last_heartbeat_acknowledged: Bool,
+    next_heartbeat: Option(process.Timer),
     ready: Bool,
   )
 }
@@ -132,7 +134,9 @@ pub fn open(gateway: GatewayBuilder) {
       gateway.persistent_state,
       self,
       None,
+      None,
       True,
+      None,
       False,
     )
     |> stratus.initialised()
@@ -443,20 +447,32 @@ fn handle_text_message(
             "Gateway resume/identify failed:\n" <> string.inspect(e),
           )
       }
-      // Begin heartbeats
-      process.spawn(fn() {
-        start_pneumatic_heart(state.self, heartbeat_interval)
-      })
-      // Ok, so it isn't actually *ready* but it is closed enough
+
+      logging.log(
+        logging.Debug,
+        "Heart started with interval "
+          <> int.to_string(heartbeat_interval)
+          <> "ms",
+      )
+
+      let state =
+        GatewayState(..state, heartbeat_interval_ms: Some(heartbeat_interval))
+
+      // Apply some jitter to the first sleep as instructed by Discord
+      int.to_float(heartbeat_interval) *. float.random()
+      |> float.truncate()
+      |> int.max(1)
+      |> process.send_after(state.self, _, SendHeartbeat)
+
+      // Ok, so it isn't actually *ready* but it is close enough
       stratus.continue(GatewayState(..state, ready: True))
     }
-    // Record acknowledge
+    // Record heartbeat acknowledgements
     Ok(HeartbeatAck) -> {
       logging.log(logging.Debug, "Heartbeat acknowledged")
-      GatewayState(..state, heartbeat_acknowledged: True)
+      GatewayState(..state, last_heartbeat_acknowledged: True)
       |> stratus.continue
     }
-
     Error(JsonParse(e)) -> {
       logging.log(
         logging.Error,
@@ -627,84 +643,56 @@ fn send_event(
 }
 
 /// Send heartbeat to server
-/// 
-/// This should only be called from inside the actor loop
 fn beat_heart(
   state: GatewayState,
   conn: Connection,
 ) -> Next(GatewayState, GatewayAction) {
-  case state.heartbeat_acknowledged {
-    True -> {
-      let state = GatewayState(..state, heartbeat_acknowledged: False)
-      case send_event(conn, Heartbeat(state.sequence)) {
-        Ok(Nil) -> {
-          logging.log(logging.Debug, "Sent heartbeat")
-          stratus.continue(state)
-        }
-        Error(e) -> {
-          logging.log(
-            logging.Warning,
-            "Unable to send heartbeat:\n" <> string.inspect(e),
-          )
-          // We don't bother retrying, if the heartbeat fails then Discord
-          // can just kill the session
-          stratus.continue(state)
-        }
-      }
-    }
-    // if we haven't been acknowledged we are supposed to reconnect
+  case state.last_heartbeat_acknowledged {
+    // If we haven't been acknowledged we are supposed to reconnect
     False -> {
       logging.log(logging.Warning, "Heartbeat not acknowledged, reconnecting")
       reconnect_and_resume(conn)
     }
+    True -> {
+      // Send the next heartbeat
+      case send_event(conn, Heartbeat(state.sequence)) {
+        Ok(Nil) -> {
+          logging.log(logging.Debug, "Sent heartbeat")
+          GatewayState(..state, last_heartbeat_acknowledged: False)
+        }
+        Error(e) -> {
+          // We don't bother retrying, if the heartbeat fails then Discord
+          // can just kill the session
+          logging.log(
+            logging.Warning,
+            "Unable to send heartbeat:\n" <> string.inspect(e),
+          )
+          state
+        }
+      }
+      // Reset the timer
+      case state.heartbeat_interval_ms {
+        Some(interval_ms) -> {
+          // We explicitly clear the timer because this function can be
+          // invoked early when Discord requests an immediate heartbeat
+          // The docs are unclear as to whether this should reset the interval.
+          // We will assume so unless we see an elevated level of disconnects.
+          let _ = option.map(state.next_heartbeat, process.cancel_timer)
+          GatewayState(
+            ..state,
+            next_heartbeat: process.send_after(
+                state.self,
+                interval_ms,
+                SendHeartbeat,
+              )
+              |> Some,
+          )
+        }
+        None -> state
+      }
+      |> stratus.continue()
+    }
   }
-}
-
-/// Send heartbeats every interval, with jitter applied to the first instance
-fn start_pneumatic_heart(
-  gateway: Subject(GatewayAction),
-  interval: Int,
-) -> Nil {
-  logging.log(
-    logging.Debug,
-    "Heart started with interval " <> int.to_string(interval) <> "ms",
-  )
-
-  // Apply some jitter to the first sleep
-  int.to_float(interval) *. float.random()
-  |> float.truncate()
-  |> int.max(1)
-  |> process.sleep
-
-  // Discord advises not to send heartbeats any faster than necessary
-  // They allow for network latency
-  // But we may get our heartbeat request delayed as the actor processes
-  // early messages.
-  // So we queue it a smidge early
-  let send_interval =
-    int.to_float(interval) *. 0.98
-    |> float.truncate()
-    // any faster and we'll hit the rate limit for sure
-    |> int.max(500)
-  logging.log(
-    logging.Debug,
-    "Adjusting heartbeat interval to "
-      <> int.to_string(send_interval)
-      <> "ms to account for actor queue",
-  )
-
-  pneumatic_heart(gateway, send_interval)
-}
-
-/// Send heartbeat every interval
-/// 
-/// The first request is sent immediately.
-/// Does not return.
-/// TODO: Turn this into a supervised actor
-fn pneumatic_heart(gateway: Subject(GatewayAction), interval: Int) -> Nil {
-  process.send(gateway, SendHeartbeat)
-  process.sleep(interval)
-  pneumatic_heart(gateway, interval)
 }
 
 /// Reconnect to Discord and resume the session
