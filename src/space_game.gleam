@@ -29,6 +29,7 @@ import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/otp/static_supervisor
+import gleam/otp/supervision
 import gleam/result
 import gleam/string
 import gleam/time/duration
@@ -52,7 +53,12 @@ import sqlight
 /// The context holds immutable global state
 /// such as precomputed values derived from environment variables.
 pub type Context {
-  Context(bot: api.Bot, db: String, goods: dict.Dict(String, goods.Goods))
+  Context(
+    bot: api.Bot,
+    db: String,
+    goods: dict.Dict(String, goods.Goods),
+    ship_refresh_actor: process.Name(ship.Message),
+  )
 }
 
 /// Main entry point
@@ -68,11 +74,13 @@ pub fn main() -> Nil {
   let assert Ok(discord_id) = envoy.get("SPACE_GAME_DISCORD_APP_ID")
   let assert Ok(discord_token) = envoy.get("SPACE_GAME_DISCORD_TOKEN")
   let assert Ok(guild_id) = envoy.get("SPACE_GAME_TEST_GUILD_ID")
+
   let ctx =
     Context(
       bot: api.new(id: discord_id, token: discord_token),
       db: database_path,
       goods: goods.goods_dict(goods.all_goods),
+      ship_refresh_actor: process.new_name("ships"),
     )
 
   case database.init_database(database_path, define_tables) {
@@ -90,6 +98,13 @@ pub fn main() -> Nil {
   let assert Ok(_) =
     static_supervisor.new(static_supervisor.OneForOne)
     |> static_supervisor.add(static_supervisor.supervised(bot_supervisor))
+    |> static_supervisor.add(
+      supervision.worker(ship.make_ship_worker(
+        ctx.ship_refresh_actor,
+        ctx.db,
+        6 * 60 * 1000,
+      )),
+    )
     |> static_supervisor.start()
 
   // Normally we'd register global commands but for testing 
@@ -115,31 +130,7 @@ pub fn main() -> Nil {
 
   let _ = waypoints.demo_waypoint(ctx.db)
 
-  process.spawn(fn() { refresh_forever(ctx, 6 * 60 * 1000) })
-
   process.sleep_forever()
-}
-
-/// Update the status of all ships in flight
-/// TODO: Use a supervised worker
-fn refresh_forever(ctx: Context, period_ms: Int) {
-  // TODO: There has to be a better solution than this loop
-  // Refresh after every command, but with a rate limit/cooldown
-  // so we don't do it too often?
-  let refresh = {
-    use conn <- database.with_writable_connection(ctx.db)
-    ship.refresh_all_ships(conn)
-  }
-  case refresh {
-    Ok(_) -> logging.log(logging.Info, "Ships refreshed")
-    Error(e) ->
-      logging.log(
-        logging.Error,
-        "Unable to refresh ships:\n" <> string.inspect(e),
-      )
-  }
-  process.sleep(period_ms)
-  refresh_forever(ctx, period_ms)
 }
 
 /// Declare database tables
@@ -510,21 +501,13 @@ pub fn handle_travel_start(ctx: Context, event: InteractionEvent) {
         Ok(_) -> {
           // Start a background process responsible for updating flight status
           // on arrival
-          process.spawn_unlinked(fn() {
+          process.send_after(
+            ctx.ship_refresh_actor |> process.named_subject,
             duration.to_seconds(time) *. 1000.0 +. 100.0
-            |> float.ceiling
-            |> float.truncate
-            |> process.sleep
-            use conn <- database.with_writable_connection(ctx.db)
-            case ship.refresh_all_ships(conn) {
-              Ok(_) -> logging.log(logging.Info, "Ships refreshed")
-              Error(e) ->
-                logging.log(
-                  logging.Error,
-                  "Unable to refresh ships:\n" <> string.inspect(e),
-                )
-            }
-          })
+              |> float.ceiling
+              |> float.truncate,
+            ship.RefreshAll,
+          )
           // Inform the user
           let arrival =
             timestamp.system_time()

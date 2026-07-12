@@ -5,10 +5,14 @@ import cake/select
 import cake/update
 import cake/where
 import gleam/dynamic/decode
+import gleam/erlang/process
 import gleam/float
+import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
+import gleam/otp/actor
 import gleam/result
+import gleam/string
 import gleam/time/duration
 import gleam/time/timestamp.{type Timestamp}
 import logging
@@ -379,7 +383,9 @@ fn refresh_ship(conn: Connection, ship: Ship) {
 }
 
 /// Update travel status of all ships
-pub fn refresh_all_ships(conn: Connection) {
+fn refresh_all_ships(
+  conn: Connection,
+) -> Result(List(Result(Nil, Nil)), sqlight.Error) {
   // TODO: This needs optimising
   // We should be using the db to filter and applying all updates in
   // one go
@@ -387,4 +393,79 @@ pub fn refresh_all_ships(conn: Connection) {
   ships
   |> list.map(refresh_ship(conn, _))
   |> Ok
+}
+
+pub type Message {
+  RefreshAll
+}
+
+pub type State {
+  State(
+    self: process.Subject(Message),
+    db: String,
+    period_ms: Int,
+    next: option.Option(process.Timer),
+  )
+}
+
+fn handle_message(state: State, msg: Message) -> actor.Next(State, a) {
+  case msg {
+    RefreshAll -> {
+      // We sometimes trigger refresh from outside the timer loop,
+      // so we clear the existing timer to maintain spacing.
+      // This is a no-op if the timer has fired.
+      option.map(state.next, process.cancel_timer)
+      case database.with_writable_connection(state.db, refresh_all_ships) {
+        Ok(_) -> {
+          logging.log(
+            logging.Debug,
+            "Ships refreshed. Next refresh in "
+              <> int.to_string(state.period_ms)
+              <> "ms",
+          )
+          let next =
+            process.send_after(state.self, state.period_ms, RefreshAll)
+            |> Some
+          State(..state, next:)
+          |> actor.continue()
+        }
+        Error(e) -> {
+          let delay = state.period_ms / 10
+          logging.log(
+            logging.Error,
+            "Ships refresh error:\n"
+              <> string.inspect(e)
+              <> "\nNext refresh in "
+              <> int.to_string(delay)
+              <> "ms",
+          )
+          let next =
+            process.send_after(state.self, delay, RefreshAll)
+            |> Some
+          State(..state, next:)
+          |> actor.continue()
+        }
+      }
+    }
+  }
+}
+
+pub fn make_ship_worker(
+  name: process.Name(Message),
+  db: String,
+  period_ms: Int,
+) -> fn() -> Result(actor.Started(process.Subject(Message)), actor.StartError) {
+  fn() {
+    let subject = process.named_subject(name)
+    let worker =
+      actor.new(State(self: subject, db:, period_ms:, next: option.None))
+      |> actor.named(name)
+      |> actor.on_message(handle_message)
+      |> actor.start()
+    case worker {
+      Ok(a) -> process.send(a.data, RefreshAll)
+      Error(_) -> Nil
+    }
+    worker
+  }
 }
