@@ -6,8 +6,15 @@
 //// Path to sqlite database.
 //// *Default: "space-game.sqlite3"* 
 //// 
+//// ## SPACE_GAME_DISCORD_APP_ID
+//// The application id for the Discord bot.
+//// Found in `Overview > General Information > Application ID`
+//// on the Discord application page.
+//// 
 //// ## SPACE_GAME_DISCORD_TOKEN
-//// Discord bot authorisation token
+//// Discord bot authorisation token.
+//// Found in `Overview > Bot > Token` on the Discord application
+//// page.
 ////
 //// ## SPACE_GAME_TEST_GUILD_ID
 //// Server ID used to register guild commands in test code.
@@ -68,6 +75,7 @@ pub fn main() -> Nil {
 
   // Configure bot with environment variables
   // Panic if we can't read them
+  let assert Ok(discord_id) = envoy.get("SPACE_GAME_DISCORD_APP_ID")
   let assert Ok(discord_token) = envoy.get("SPACE_GAME_DISCORD_TOKEN")
   let assert Ok(guild) = envoy.get("SPACE_GAME_TEST_GUILD_ID")
 
@@ -75,6 +83,7 @@ pub fn main() -> Nil {
     // normally we'd pass glboal commands in the second arg but for
     // testing we're using guild args because they update faster
     bot.start_bot(
+      discord_id,
       discord_token,
       [],
       [#(guild, define_commands())] |> dict.from_list,

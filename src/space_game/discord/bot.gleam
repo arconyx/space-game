@@ -2,10 +2,7 @@
 //// for starting the bot.
 
 import gleam/dict.{type Dict}
-import gleam/dynamic/decode
 import gleam/erlang/process
-import gleam/http
-import gleam/option.{None}
 import gleam/otp/actor
 import gleam/otp/static_supervisor
 import gleam/otp/supervision
@@ -28,20 +25,12 @@ pub type Error {
 /// which mantains a connection to the Discord gateway over
 /// which we receive messages.
 pub fn start_bot(
+  id: String,
   token: String,
   global_commands: List(SlashCommand),
   guild_commands: Dict(String, List(SlashCommand)),
   command_handler: fn(Bot, InteractionEvent) -> Nil,
 ) -> Result(Nil, Error) {
-  // Get our application id from the server so we don't have to hardcode it
-  // This will fail if Discord is unreachable, but if we can't reach Discord
-  // then we hardly need the id.
-  let id =
-    api.request(token, http.Get, "/applications/@me", None)
-    |> api.send_and_decode(decode.at(["id"], decode.string))
-    |> result.map_error(API)
-  use id <- result.try(id)
-
   // Now we have the ID we can construct the bot object
   // We'll be embedding this into the command handler so we access
   // when dealing with interactions.
