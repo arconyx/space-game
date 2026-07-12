@@ -70,7 +70,7 @@ pub fn with_writable_connection(
   path: String,
   callback: fn(Connection) -> a,
 ) -> a {
-  with_connection(path, "rwc", fn(conn) {
+  with_connection(path, "rw", fn(conn) {
     case sqlight.exec("PRAGMA foreign_keys = ON;", conn) {
       Ok(_) -> Nil
       Error(e) ->
