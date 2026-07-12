@@ -7,8 +7,7 @@ import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
-import space_game/discord/api
-import space_game/discord/types.{type Bot}
+import space_game/discord/api.{type Bot}
 import utils/non_empty_lists.{type NonEmptyList}
 
 /// The contexts in which a command can be invoked
@@ -257,7 +256,7 @@ pub fn register_global_commands(
     _ ->
       list.map(cmds, slash_command_to_json)
       |> json.preprocessed_array
-      |> api.put(bot, "/applications/" <> bot.id <> "/commands", _)
+      |> api.put(bot, "/applications/" <> api.id(bot) <> "/commands", _)
       |> api.send
       |> result.replace(Nil)
   }
@@ -282,7 +281,7 @@ pub fn register_guild_commands(
       |> json.preprocessed_array
       |> api.put(
         bot,
-        "/applications/" <> bot.id <> "/guilds/" <> guild <> "/commands",
+        "/applications/" <> api.id(bot) <> "/guilds/" <> guild <> "/commands",
         _,
       )
       |> api.send

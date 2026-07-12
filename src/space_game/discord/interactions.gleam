@@ -13,8 +13,7 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import logging
-import space_game/discord/api
-import space_game/discord/types.{type Bot}
+import space_game/discord/api.{type Bot}
 import utils/timing
 
 /// Discord has a limited set of valid types for command options.
@@ -462,7 +461,7 @@ fn edit_response(
   |> api.patch(
     bot,
     "/webhooks/ "
-      <> bot.id
+      <> api.id(bot)
       <> "/"
       <> event.continuation_token
       <> "/messages/@original",
@@ -594,7 +593,7 @@ pub fn send_followup(
   |> json.object()
   |> api.post(
     bot,
-    "/webhooks/ " <> bot.id <> "/" <> event.continuation_token,
+    "/webhooks/ " <> api.id(bot) <> "/" <> event.continuation_token,
     _,
   )
   |> api.send()

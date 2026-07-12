@@ -17,7 +17,23 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import logging
-import space_game/discord/types.{type Bot}
+
+/// The bot.
+///
+/// This is information commonly needed for http requests.
+/// The token is sensitive so try not to leak it into logs.
+pub opaque type Bot {
+  Bot(id: String, token: String)
+}
+
+pub fn new(id id: String, token token: String) -> Bot {
+  Bot(id:, token:)
+}
+
+/// Get bot id
+pub fn id(bot: Bot) -> String {
+  bot.id
+}
 
 // TODO: Rate limiting
 // I don't think we're ikely to hit it though tbh

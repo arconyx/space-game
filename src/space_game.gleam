@@ -27,7 +27,8 @@ import gleam/time/duration
 import gleam/time/timestamp
 import logging
 import space_game/database
-import space_game/discord/bot.{type Bot}
+import space_game/discord/api.{type Bot}
+import space_game/discord/bot
 import space_game/discord/commands.{
   type SlashCommand, NestedCommand, Subcommand, TopLevelCommand,
 }

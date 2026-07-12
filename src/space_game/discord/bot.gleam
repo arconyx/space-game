@@ -11,22 +11,16 @@ import gleam/otp/static_supervisor
 import gleam/otp/supervision
 import gleam/result
 import logging
-import space_game/discord/api
+import space_game/discord/api.{type Bot}
 import space_game/discord/commands.{type SlashCommand}
 import space_game/discord/gateway
 import space_game/discord/interactions.{type InteractionEvent}
-import space_game/discord/types
 import space_game/discord/watcher
 
 pub type Error {
   Gatehouse(actor.StartError)
   API(api.Error)
 }
-
-/// Reexport for convenience.
-/// This type would be defined here if it didn't cause circular dependencies.
-pub type Bot =
-  types.Bot
 
 /// Start the bot and register the given global commands.
 ///
@@ -51,7 +45,7 @@ pub fn start_bot(
   // Now we have the ID we can construct the bot object
   // We'll be embedding this into the command handler so we access
   // when dealing with interactions.
-  let bot = types.Bot(token: token, id: id)
+  let bot = api.new(id:, token:)
 
   // Prepare the gatehouse, responsible for managing the processes
   // that listen for Discord events
