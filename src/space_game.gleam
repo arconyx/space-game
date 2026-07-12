@@ -68,19 +68,21 @@ pub fn main() -> Nil {
   // Configure bot with environment variables
   // Panic if we can't read them
   let assert Ok(discord_token) = envoy.get("SPACE_GAME_DISCORD_TOKEN")
+  let assert Ok(guild) = envoy.get("SPACE_GAME_TEST_GUILD_ID")
 
-  let assert Ok(bot) =
+  let assert Ok(Nil) =
     // normally we'd pass glboal commands in the second arg but for
     // testing we're using guild args because they update faster
-    bot.start_bot(discord_token, [], fn(bot, event) {
-      // embedding the context with a closure
-      command_handler(ctx, bot, event)
-    })
+    bot.start_bot(
+      discord_token,
+      [],
+      [#(guild, define_commands())] |> dict.from_list,
+      fn(bot, event) {
+        // embedding the context with a closure
+        command_handler(ctx, bot, event)
+      },
+    )
 
-  // Test code
-  let assert Ok(guild) = envoy.get("SPACE_GAME_TEST_GUILD_ID")
-  let assert Ok(_) =
-    commands.register_guild_commands(bot, guild, define_commands())
   let _ = waypoints.demo_waypoint(ctx.db)
 
   process.spawn(fn() { refresh_forever(ctx, 6 * 60 * 1000) })

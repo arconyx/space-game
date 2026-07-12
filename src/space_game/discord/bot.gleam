@@ -1,6 +1,7 @@
 //// Wrap up some other modules to provide a convenient frontend
 //// for starting the bot.
 
+import gleam/dict.{type Dict}
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/http
@@ -35,8 +36,9 @@ pub type Bot =
 pub fn start_bot(
   token: String,
   global_commands: List(SlashCommand),
+  guild_commands: Dict(String, List(SlashCommand)),
   command_handler: fn(Bot, InteractionEvent) -> Nil,
-) -> Result(Bot, Error) {
+) -> Result(Nil, Error) {
   // Get our application id from the server so we don't have to hardcode it
   // This will fail if Discord is unreachable, but if we can't reach Discord
   // then we hardly need the id.
@@ -66,16 +68,34 @@ pub fn start_bot(
   logging.log(logging.Info, "Gatehouse started")
 
   // If we're connected then try register global commands
-  // There's a quota on creating there (200/day) so we only
+  // There's a quota on creating there (200/day) so we
   // give the early sections a chance to fail before we use any.
   // Existing, unchanged, commands should not count towards the quota.
   use _ <- result.try(
     commands.register_global_commands(bot, global_commands)
     |> result.map_error(API),
   )
-  logging.log(logging.Debug, "Commands registered")
+  logging.log(logging.Debug, "Global commands registered")
+  guild_commands
+  |> dict.each(fn(guild_id, commands) {
+    case commands.register_guild_commands(bot, guild_id, commands) {
+      Ok(_) ->
+        logging.log(
+          logging.Debug,
+          "Guild commands registered for guild " <> guild_id,
+        )
+      Error(e) ->
+        logging.log(
+          logging.Error,
+          "Unable to register guild commands for guild "
+            <> guild_id
+            <> " due to error:\n"
+            <> api.error_to_string(e),
+        )
+    }
+  })
 
-  Ok(bot)
+  Ok(Nil)
 }
 
 /// Construct the gatehouse. This is an OPT supervisor.
