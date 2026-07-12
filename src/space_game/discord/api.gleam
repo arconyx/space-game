@@ -12,8 +12,10 @@ import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
 import gleam/int
 import gleam/json.{type Json}
+import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
+import gleam/string
 import logging
 import space_game/discord/types.{type Bot}
 
@@ -168,5 +170,53 @@ pub fn send_and_decode(
   case send(req) {
     Ok(resp) -> json.parse(resp.body, decoder) |> result.map_error(DecodeError)
     Error(e) -> Error(e)
+  }
+}
+
+pub fn error_to_string(error: Error) -> String {
+  case error {
+    Transmission(hackney_error) ->
+      case hackney_error {
+        hackney.InvalidUtf8Response -> "API response is not valid UTF8"
+        hackney.Other(dynamic) ->
+          "API request failed due to a generic error reported by Hackney: "
+          <> string.inspect(dynamic)
+      }
+    ResponseCode(error_code) ->
+      "API returned error code: "
+      <> case error_code {
+        BadRequest -> "400 bad request"
+        Unauthorised -> "401 unauthorised"
+        Forbidden -> "403 forbidden"
+        NotFound -> "404 not found"
+        MethodNotAllowed -> "405 method not allowed"
+        TooManyRequests -> "429 too many requests"
+        GatewayUnavailable -> "502 gateway unavailable"
+        ServerError(code) -> int.to_string(code) <> " server error"
+        Unrecognised(code) -> int.to_string(code) <> " unknown error"
+      }
+    DecodeError(decode_error) ->
+      "Could not decode API response JSON: "
+      <> case decode_error {
+        json.UnexpectedEndOfInput -> "Unexpected end of input"
+        json.UnexpectedByte(byte) -> "Unexpected byte '" <> byte <> "'"
+        json.UnexpectedSequence(sequence) ->
+          "Unexpected sequence '" <> sequence <> "'"
+        json.UnableToDecode(decode_errors) ->
+          "\n"
+          <> string.join(
+            list.map(decode_errors, fn(error) {
+              let decode.DecodeError(expected:, found:, path:) = error
+              "Expected '"
+              <> expected
+              <> "' but found '"
+              <> found
+              <> "' at '"
+              <> string.join(path, with: ".")
+              <> "'"
+            }),
+            with: "\n",
+          )
+      }
   }
 }
