@@ -11,8 +11,9 @@
 //// Stratus spawns an actor running an event loop we provide. We communicate with the loop
 //// in the normal erlang OTP way - that is by sending messages to it.
 
+import gleam/bit_array
 import gleam/dynamic/decode.{type Dynamic}
-import gleam/erlang/process.{type Name, type Pid, type Subject}
+import gleam/erlang/process.{type Pid, type Subject}
 import gleam/float
 import gleam/http
 import gleam/http/request
@@ -25,7 +26,7 @@ import gleam/string
 import logging
 import space_game/discord/api
 import space_game/discord/interactions.{type InteractionEvent}
-import space_game/discord/watcher.{type ResumeState}
+import space_game/discord/persistent_state.{type PersistentState}
 import stratus.{
   type Connection, type InternalMessage, type Message, type Next,
   type SocketReason,
@@ -45,13 +46,10 @@ pub type GatewayAction {
 }
 
 /// Internal state of the gateway
-/// 
-/// Heartbeat interval is in milliseconds
 pub type GatewayState {
   GatewayState(
     token: String,
-    resume: Option(ResumeState),
-    watcher: Subject(watcher.Message),
+    persistent_state: PersistentState,
     self: Subject(GatewayAction),
     // we need this for heartbeats as well as resuming
     sequence: Option(Int),
@@ -76,8 +74,8 @@ pub type GatewayBuilder {
   GatewayBuilder(
     url: String,
     token: String,
+    persistent_state: PersistentState,
     handler: fn(InteractionEvent) -> Nil,
-    watcher: Name(watcher.Message),
   )
 }
 
@@ -94,20 +92,15 @@ pub fn get_websocket_address(token: String) -> Result(String, api.Error) {
 /// 
 /// This function will panic if the watcher is unavailable
 pub fn open(gateway: GatewayBuilder) {
-  let watcher_subj = process.named_subject(gateway.watcher)
-  let resume = process.call(watcher_subj, 100, watcher.Get)
-
   // Get the url Discord wants us to connect to, using the resume
   // address if set
-  let url = case resume {
-    Some(r) -> r.url
-    None -> gateway.url
-  }
+
+  // TODO: Do we actually send the resume event when resuming?
 
   // Gleam chokes on 'ws' and 'wss' prefixes
   // We deliberately upgrade ws/http to wss/https because eww unencrypted connection
   let url =
-    url
+    persistent_state.get_gateway_url(gateway.persistent_state)
     |> string.replace("wss://", "https://")
     |> string.replace("ws://", "https://")
   let req =
@@ -134,7 +127,14 @@ pub fn open(gateway: GatewayBuilder) {
           }
         }
       })
-    GatewayState(gateway.token, resume, watcher_subj, self, None, True, False)
+    GatewayState(
+      gateway.token,
+      gateway.persistent_state,
+      self,
+      None,
+      True,
+      False,
+    )
     |> stratus.initialised()
     |> stratus.selecting(process.new_selector() |> process.select(self))
     |> Ok
@@ -156,10 +156,82 @@ pub fn open(gateway: GatewayBuilder) {
 /// be avoided.
 fn on_close(state: GatewayState, reason: stratus.CloseReason) {
   case reason {
+    // We are allowed to resume when the gateway is closed without a code
     stratus.NotProvided ->
       logging.log(logging.Info, "Gateway closed by Discord without reason")
+    stratus.Normal(body:) -> {
+      persistent_state.clear_resume_state(state.persistent_state)
+      logging.log(
+        logging.Info,
+        "Gateway closed with code 1000 normal: "
+          <> safe_bit_array_to_string(body),
+      )
+    }
+    stratus.GoingAway(body:) -> {
+      persistent_state.clear_resume_state(state.persistent_state)
+      logging.log(
+        logging.Info,
+        "Gateway closed with code 1001 going away: "
+          <> safe_bit_array_to_string(body),
+      )
+    }
+    stratus.ProtocolError(body:) -> {
+      persistent_state.clear_resume_state(state.persistent_state)
+      logging.log(
+        logging.Warning,
+        "Gateway closed with code 1002 protocol error: "
+          <> safe_bit_array_to_string(body),
+      )
+    }
+    stratus.UnexpectedDataType(body:) -> {
+      persistent_state.clear_resume_state(state.persistent_state)
+      logging.log(
+        logging.Info,
+        "Gateway closed with code 1003 unexpected data type: "
+          <> safe_bit_array_to_string(body),
+      )
+    }
+    stratus.InconsistentDataType(body:) -> {
+      persistent_state.clear_resume_state(state.persistent_state)
+      logging.log(
+        logging.Info,
+        "Gateway closed with code 1007 inconsistent data type"
+          <> safe_bit_array_to_string(body),
+      )
+    }
+    stratus.PolicyViolation(body:) -> {
+      persistent_state.clear_resume_state(state.persistent_state)
+      logging.log(
+        logging.Info,
+        "Gateway closed with code 1008 policy violation: "
+          <> safe_bit_array_to_string(body),
+      )
+    }
+    stratus.MessageTooBig(body:) -> {
+      persistent_state.clear_resume_state(state.persistent_state)
+      logging.log(
+        logging.Info,
+        "Gateway closed with code 1009 message too big: "
+          <> safe_bit_array_to_string(body),
+      )
+    }
+    stratus.MissingExtensions(body:) -> {
+      persistent_state.clear_resume_state(state.persistent_state)
+      logging.log(
+        logging.Info,
+        "Gateway closed with status 1010 missing extensions: "
+          <> safe_bit_array_to_string(body),
+      )
+    }
+    stratus.UnexpectedCondition(body:) -> {
+      persistent_state.clear_resume_state(state.persistent_state)
+      logging.log(
+        logging.Info,
+        "Gateway closed with code 1011 unexpected condition: "
+          <> safe_bit_array_to_string(body),
+      )
+    }
     stratus.Custom(reason) ->
-      // TODO: Panics don't kill the supervisor, so we may want to explicitly kill it
       case stratus.get_custom_code(reason) {
         4000 ->
           logging.log(logging.Warning, "Discord closed gateway: unknown error")
@@ -172,11 +244,13 @@ fn on_close(state: GatewayState, reason: stratus.CloseReason) {
             logging.Warning,
             "Discord closed gateway: not authenticated",
           )
-        4004 ->
+        4004 -> {
+          persistent_state.clear_resume_state(state.persistent_state)
           logging.log(
             logging.Warning,
             "Discord closed gateway: authentication failed",
           )
+        }
         4005 ->
           logging.log(
             logging.Warning,
@@ -191,30 +265,41 @@ fn on_close(state: GatewayState, reason: stratus.CloseReason) {
           logging.log(logging.Warning, "Discord closed gateway: rate limited")
         4009 ->
           logging.log(logging.Warning, "Discord closed gateway: timed out")
-        4011 -> {
+        4010 -> {
           logging.log(
-            logging.Critical,
+            logging.Warning,
+            "Discord closed gateway: invalid shard specified",
+          )
+          // TODO: Does a panic really shutdown properly?
+          // Make this a significant transient child instead?
+          // Will stratus intefer with the shutdowns?
+          panic as "Invalid shard specified"
+        }
+        4011 -> {
+          persistent_state.clear_resume_state(state.persistent_state)
+          logging.log(
+            logging.Error,
             "Discord closed gateway: sharding required",
           )
           panic as "Sharding required"
         }
         4012 -> {
+          persistent_state.clear_resume_state(state.persistent_state)
           logging.log(
-            logging.Critical,
+            logging.Error,
             "Discord closed gateway: invalid api version",
           )
           panic as "Invalid API version"
         }
         4013 -> {
-          logging.log(
-            logging.Critical,
-            "Discord closed gateway: invalid intent",
-          )
+          persistent_state.clear_resume_state(state.persistent_state)
+          logging.log(logging.Error, "Discord closed gateway: invalid intent")
           panic as "Invalid intent"
         }
         4014 -> {
+          persistent_state.clear_resume_state(state.persistent_state)
           logging.log(
-            logging.Critical,
+            logging.Error,
             "Discord closed gateway: disallowed intent",
           )
           panic as "Disallowed intent"
@@ -226,16 +311,12 @@ fn on_close(state: GatewayState, reason: stratus.CloseReason) {
           )
         }
       }
-
-    _ -> {
-      process.send(state.watcher, watcher.Clear)
-      logging.log(
-        logging.Info,
-        "Gateway closed by Discord with indication not to resume: "
-          <> string.inspect(reason),
-      )
-    }
   }
+}
+
+fn safe_bit_array_to_string(array: BitArray) -> String {
+  bit_array.to_string(array)
+  |> result.unwrap("Unable to decode bit array associated with error")
 }
 
 /// Top level handler for messages recieved by the stratus actor
@@ -312,8 +393,8 @@ fn handle_text_message(
   case parse_text_message(msg) {
     Ok(Dispatch(data, sequence, name)) -> {
       // Update state in watcher
-      process.send(state.watcher, watcher.UpdateSequence(sequence))
-      handle_dispatch(data, name, state.watcher, interaction_handler)
+      persistent_state.update_sequence(state.persistent_state, sequence)
+      handle_dispatch(data, name, state.persistent_state, interaction_handler)
       // Update sequence for heartbeat purposes
       let state = GatewayState(..state, sequence: Some(sequence))
       stratus.continue(state)
@@ -338,17 +419,20 @@ fn handle_text_message(
             "Invalid session reported, full reconnect requested",
           )
           let _ = stratus.close(conn, stratus.Normal(<<"invalid session">>))
-          process.send(state.watcher, watcher.Clear)
-          stratus.stop()
+          persistent_state.clear_resume_state(state.persistent_state)
+          stratus.stop_abnormal("invalid session")
         }
       }
     // Respond with identify
     Ok(Hello(heartbeat_interval)) -> {
       logging.log(logging.Debug, "Got hello from Discord")
       // If we're resuming send a resume instead of an identify
-      let handshake = case state.resume {
+      let handshake = case
+        persistent_state.get_resume_state(state.persistent_state)
+      {
         Some(resume) ->
-          Resume(state.token, resume.id, resume.sequence) |> send_event(conn, _)
+          Resume(state.token, resume.session_id, resume.sequence_number)
+          |> send_event(conn, _)
         None -> Identify(state.token) |> send_event(conn, _)
       }
       case handshake {
@@ -424,7 +508,7 @@ fn parse_text_message(msg: String) -> Result(InboundEvent, Error) {
 fn handle_dispatch(
   data: Dynamic,
   name: String,
-  watcher: Subject(watcher.Message),
+  state: PersistentState,
   interaction_handler: fn(InteractionEvent) -> Nil,
 ) -> Nil {
   case name {
@@ -435,8 +519,7 @@ fn handle_dispatch(
         #(url, id) |> decode.success
       }
       case decode.run(data, decoder) {
-        Ok(#(url, id)) ->
-          process.send(watcher, watcher.UpdateFromReady(url, id))
+        Ok(#(url, id)) -> persistent_state.set_resume_state(state, url, id)
         Error(e) ->
           logging.log(
             logging.Warning,

@@ -89,7 +89,7 @@ pub fn main() -> Nil {
       panic as { "Unable to initalise database: " <> string.inspect(e) }
   }
 
-  let assert Ok(bot_supervisor) =
+  let assert Ok(bot_worker) =
     bot.create(discord_token, fn(event) {
       // embedding the context + bot with a closure
       command_handler(ctx, event)
@@ -97,7 +97,7 @@ pub fn main() -> Nil {
 
   let assert Ok(_) =
     static_supervisor.new(static_supervisor.OneForOne)
-    |> static_supervisor.add(static_supervisor.supervised(bot_supervisor))
+    |> static_supervisor.add(bot_worker)
     |> static_supervisor.add(
       supervision.worker(ship.make_ship_worker(
         ctx.ship_refresh_actor,

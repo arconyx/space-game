@@ -7,6 +7,7 @@
 # You should check this file into your source control repository.
 
 packages = [
+  { name = "booklet", version = "1.1.0", build_tools = ["gleam"], requirements = [], otp_app = "booklet", source = "hex", outer_checksum = "08E0FDB78DC4D8A5D3C80295B021505C7D2A2E7B6C6D5EAB7286C36F4A53C851" },
   { name = "cake", version = "4.1.0", build_tools = ["gleam"], requirements = ["gleam_stdlib", "gleam_time"], otp_app = "cake", source = "hex", outer_checksum = "EC046BE4465DECFF44312D185DE2EF00C053EDEFB964351C79745A2339CF08C1" },
   { name = "cake_sqlight", version = "1.5.0", build_tools = ["gleam"], requirements = ["cake", "gleam_stdlib", "gleam_time", "sqlight"], otp_app = "cake_sqlight", source = "hex", outer_checksum = "F4BCD48125C95E9434A6B1C925A3C3E64A13786601003730405E230C9075BDB7" },
   { name = "certifi", version = "2.17.0", build_tools = ["rebar3"], requirements = [], otp_app = "certifi", source = "hex", outer_checksum = "8122798A17F0293C80DAADA25D0F81C7F4D708C73FEF782C7C9B1950E26E4D21" },
@@ -37,6 +38,7 @@ packages = [
 ]
 
 [requirements]
+booklet = { version = ">= 1.1.0 and < 2.0.0" }
 cake = { version = ">= 4.1.0 and < 5.0.0" }
 cake_sqlight = { version = ">= 1.1.2 and < 2.0.0" }
 envoy = { version = ">= 1.2.0 and < 2.0.0" }
