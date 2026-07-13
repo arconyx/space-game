@@ -89,20 +89,22 @@ pub fn get_websocket_address(token: String) -> Result(String, api.Error) {
 
 /// Open a connection to Discord using their Gateway protocol
 /// over websockets
-/// 
-/// This function will panic if the watcher is unavailable
-pub fn open(gateway: GatewayBuilder) {
+pub fn open(
+  builder: GatewayBuilder,
+) -> Result(
+  actor.Started(Subject(InternalMessage(GatewayAction))),
+  actor.StartError,
+) {
   // Get the url Discord wants us to connect to, using the resume
   // address if set
-
-  // TODO: Do we actually send the resume event when resuming?
-
-  // Gleam chokes on 'ws' and 'wss' prefixes
-  // We deliberately upgrade ws/http to wss/https because eww unencrypted connection
   let url =
-    persistent_state.get_gateway_url(gateway.persistent_state)
+    persistent_state.get_gateway_url(builder.persistent_state)
+    // Gleam chokes on 'ws' and 'wss' prefixes
+    // We deliberately upgrade ws/http to wss/https because eww unencrypted connection
     |> string.replace("wss://", "https://")
     |> string.replace("ws://", "https://")
+
+  // Construct initial websockets request
   let req =
     request.to(url <> "?v=10&encoding=json")
     |> result.replace_error(actor.InitFailed(
@@ -111,14 +113,12 @@ pub fn open(gateway: GatewayBuilder) {
   use req <- result.try(req)
   let req = req |> api.default_headers
 
-  logging.log(logging.Debug, "Websocket request ready")
-
   stratus.new_with_initialiser(request: req, init: fn() {
     // We use this to pass messages to the gateway from inside the gateway
     let self: Subject(GatewayAction) = process.new_subject()
     GatewayState(
-      gateway.token,
-      gateway.persistent_state,
+      builder.token,
+      builder.persistent_state,
       self,
       None,
       None,
@@ -126,11 +126,11 @@ pub fn open(gateway: GatewayBuilder) {
       None,
     )
     |> stratus.initialised()
-    |> stratus.selecting(process.new_selector() |> process.select(self))
+    |> stratus.selecting(process.select(process.new_selector(), self))
     |> Ok
   })
   |> stratus.on_message(fn(state, msg, conn) {
-    handle_messages(state, msg, conn, gateway.handler)
+    handle_messages(state, msg, conn, builder.handler)
   })
   |> stratus.on_close(on_close)
   |> stratus.start()
@@ -144,7 +144,7 @@ pub fn open(gateway: GatewayBuilder) {
 /// 
 /// This function will panic when the close code suggests reconnection should
 /// be avoided.
-fn on_close(state: GatewayState, reason: stratus.CloseReason) {
+fn on_close(state: GatewayState, reason: stratus.CloseReason) -> Nil {
   case reason {
     // We are allowed to resume when the gateway is closed without a code
     stratus.NotProvided ->
@@ -261,8 +261,7 @@ fn on_close(state: GatewayState, reason: stratus.CloseReason) {
             "Discord closed gateway: invalid shard specified",
           )
           // TODO: Does a panic really shutdown properly?
-          // Make this a significant transient child instead?
-          // Will stratus intefer with the shutdowns?
+          // Add a do-not-revive flag
           panic as "Invalid shard specified"
         }
         4011 -> {
@@ -429,22 +428,19 @@ fn handle_text_message(
       case handshake {
         Ok(Nil) ->
           logging.log(logging.Debug, "Gateway resume or identify event sent")
-        Error(e) ->
+        Error(Socket(socket_reason)) ->
           logging.log(
             logging.Error,
-            "Gateway resume/identify failed:\n" <> string.inspect(e),
+            "Gateway resume/identify failed due to socket error:\n"
+              <> string.inspect(socket_reason),
           )
       }
-
-      let state =
-        GatewayState(..state, heartbeat_interval_ms: Some(heartbeat_interval))
 
       // Apply some jitter to the first sleep as instructed by Discord
       int.to_float(heartbeat_interval) *. float.random()
       |> float.truncate()
       |> int.max(1)
       |> process.send_after(state.self, _, SendHeartbeat)
-
       logging.log(
         logging.Debug,
         "Heart started with interval "
@@ -452,8 +448,8 @@ fn handle_text_message(
           <> "ms",
       )
 
-      // Ok, so it isn't actually *ready* but it is close enough
-      stratus.continue(GatewayState(..state, ready: True))
+      GatewayState(..state, heartbeat_interval_ms: Some(heartbeat_interval))
+      |> stratus.continue()
     }
     // Record heartbeat acknowledgements
     Ok(HeartbeatAck) -> {
@@ -687,7 +683,7 @@ fn beat_heart(
 /// 
 /// This works by killing the actor and relying on the 
 /// supervisor to replace it.
-fn reconnect_and_resume(conn: Connection) {
+fn reconnect_and_resume(conn: Connection) -> Next(a, b) {
   logging.log(logging.Debug, "Reconnect and resume triggered")
   // We can resume so long as the watcher has the correct state, so all we need
   // to do is close the connection and stop the client.
