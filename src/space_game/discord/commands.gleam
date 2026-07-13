@@ -246,22 +246,19 @@ fn slash_command_to_json(cmd: SlashCommand) -> Json {
 /// However commands defined though this method should not count towards the rate limit
 /// if they are already registered and their specification is unchanged.
 /// 
-/// Registering an empty list is a no-op.
+/// This overwrites the registered commands.
+/// Registering an empty list will delete all existing commands.
 ///
 /// There may be some latency before the new commands become available.
 pub fn register_global_commands(
   bot: Bot,
   cmds: List(SlashCommand),
 ) -> Result(Nil, api.Error) {
-  case cmds {
-    [] -> Ok(Nil)
-    _ ->
-      list.map(cmds, slash_command_to_json)
-      |> json.preprocessed_array
-      |> api.put(bot, "/applications/" <> api.id(bot) <> "/commands", _)
-      |> api.send
-      |> result.replace(Nil)
-  }
+  list.map(cmds, slash_command_to_json)
+  |> json.preprocessed_array
+  |> api.put(bot, "/applications/" <> api.id(bot) <> "/commands", _)
+  |> api.send
+  |> result.replace(Nil)
 }
 
 /// Register a command to a guild.
@@ -272,23 +269,20 @@ pub fn register_global_commands(
 /// These are subject to the same rate limits as `register_global_commands`.
 /// They update instantly, which makes then ideal for testing.
 /// 
-/// Registering an empty list is a no-op.
+/// This overwrites the registered commands.
+/// Registering an empty list will delete all existing commands.
 pub fn register_guild_commands(
   bot: Bot,
   guild: String,
   cmds: List(SlashCommand),
 ) -> Result(Nil, api.Error) {
-  case cmds {
-    [] -> Ok(Nil)
-    _ ->
-      list.map(cmds, slash_command_to_json)
-      |> json.preprocessed_array
-      |> api.put(
-        bot,
-        "/applications/" <> api.id(bot) <> "/guilds/" <> guild <> "/commands",
-        _,
-      )
-      |> api.send
-      |> result.replace(Nil)
-  }
+  list.map(cmds, slash_command_to_json)
+  |> json.preprocessed_array
+  |> api.put(
+    bot,
+    "/applications/" <> api.id(bot) <> "/guilds/" <> guild <> "/commands",
+    _,
+  )
+  |> api.send
+  |> result.replace(Nil)
 }

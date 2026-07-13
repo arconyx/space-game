@@ -4,7 +4,7 @@
 
 import gleam/dict.{type Dict}
 import gleam/dynamic/decode.{type Dynamic}
-import gleam/erlang/process.{type Pid}
+import gleam/erlang/process
 import gleam/http/response
 import gleam/int
 import gleam/json
@@ -14,7 +14,6 @@ import gleam/result
 import gleam/string
 import logging
 import space_game/discord/api.{type Bot}
-import utils/timing
 
 /// Discord has a limited set of valid types for command options.
 /// We wrap them as `OptionValue` so that we can stick them all
@@ -338,76 +337,6 @@ fn cook_interaction(
   |> Ok
 }
 
-/// Run interaction handler in an independent process
-///
-/// This immediately spawns an unlinked (independent) process.
-/// This process then creates an inner process to run the handler and traps exists
-/// such that it can handle errors if the `handler` panics. Currently there is no
-/// special error handling beyond logging it but it is planned to return an error message
-/// to Discord to alert the user.
-///
-/// If the process does not run in `timeout` ms it will be stopped. If stopping takes more
-/// than `timeout` ms then it will be killed.
-///
-/// As the outer process is unlinked from the caller this function can panic without
-/// the crash propagating to the caller. This avoids taking down the gateway just because
-/// processing on a single interaction failed.
-///
-/// TODO: Use a dynamic supervisor instead of this hacked together stand-in
-/// TODO: Send error message to Discord on failure. This may take some redesign as we need
-/// the interaction object to send a reply.
-pub fn process_independently(
-  timeout: Int,
-  label: String,
-  on_error: fn() -> Nil,
-  handler: fn() -> Nil,
-) -> Pid {
-  use <- process.spawn_unlinked
-  use <- timing.timed(label)
-
-  process.trap_exits(True)
-  // start the worker
-  let child = process.spawn(handler)
-
-  // this selector catches exists
-  let exit_selector =
-    process.new_selector()
-    |> process.select_trapped_exits(fn(exit_msg) {
-      case exit_msg.reason {
-        process.Normal | process.Killed -> Nil
-        process.Abnormal(reason) -> {
-          logging.log(
-            logging.Error,
-            label <> " failed with reason " <> string.inspect(reason),
-          )
-          on_error()
-        }
-      }
-    })
-
-  // run the selector
-  case process.selector_receive(exit_selector, timeout) {
-    // Process has exited
-    Ok(Nil) -> Nil
-    // Timeout reached - order process to shutdown
-    Error(Nil) -> {
-      logging.log(
-        logging.Warning,
-        label <> " " <> string.inspect(child) <> " timed out",
-      )
-      process.send_abnormal_exit(child, "Timeout")
-      // If we're taking too long to shutdown kill it
-      case process.selector_receive(exit_selector, timeout) {
-        Ok(Nil) -> Nil
-        Error(Nil) ->
-          logging.log(logging.Warning, "Killing " <> string.inspect(child))
-      }
-    }
-  }
-
-  logging.log(logging.Debug, label <> " exited")
-}
-
 /// Send a deferred response notification to the server
 fn send_deferral(
   bot: Bot,
@@ -473,8 +402,7 @@ fn edit_response(
 /// Informs Discord we're processing the response.
 ///
 /// Use this for complicated commands that take some processing.
-/// The inner function is safe from the 2500ms timer we enforce on interaction processing
-/// as it runs in an unlinked process.
+/// The inner function runs in an unlinked process.
 ///
 /// If you want to do things after returning the final edit to the user,
 /// consider spawning another new process.
@@ -486,25 +414,23 @@ pub fn defer_response(
 ) -> Nil {
   case send_deferral(bot, event, ephemeral) {
     Ok(_) -> {
-      {
-        use <- process_independently(15 * 1000, "Deferred response", fn() {
-          let _ =
-            send_followup(
-              bot,
-              event,
-              FollowupResponse("Internal error", ephemeral),
-            )
-          Nil
-        })
+      process.spawn_unlinked(fn() {
         case edit_response(bot, event, fun()) {
           Ok(_) -> logging.log(logging.Debug, "Deferred response edited")
-          Error(e) ->
+          Error(e) -> {
+            let _ =
+              send_followup(
+                bot,
+                event,
+                FollowupResponse("Internal error", ephemeral),
+              )
             logging.log(
               logging.Error,
               "Unable to edit deferred response: " <> string.inspect(e),
             )
+          }
         }
-      }
+      })
       Nil
     }
     Error(e) ->

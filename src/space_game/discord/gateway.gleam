@@ -534,26 +534,16 @@ fn handle_dispatch(
     "RESUMED" -> logging.log(logging.Info, "Gateway resumed")
     // This should basically never happen given we have very few reasons to send requests
     "RATE_LIMITED" -> logging.log(logging.Warning, "Rate limit reached")
-    "INTERACTION_CREATE" -> {
-      // Discord requires a response within 3 seconds
-      interactions.process_independently(
-        2500,
-        "Interaction worker",
-        fn() { Nil },
-        fn() {
-          case interactions.parse_event(data) {
-            Ok(i) -> interaction_handler(i)
-            Error(e) ->
-              logging.log(
-                logging.Error,
-                "Unable to parse interaction:\n"
-                  <> interactions.parse_error_to_string(e),
-              )
-          }
-        },
-      )
-      Nil
-    }
+    "INTERACTION_CREATE" ->
+      case interactions.parse_event(data) {
+        Ok(i) -> interaction_handler(i)
+        Error(e) ->
+          logging.log(
+            logging.Error,
+            "Unable to parse interaction:\n"
+              <> interactions.parse_error_to_string(e),
+          )
+      }
     _ -> logging.log(logging.Debug, "Ignoring dispatch event " <> name)
   }
 }
