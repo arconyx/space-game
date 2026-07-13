@@ -40,7 +40,6 @@ import stratus.{
 /// Communicate with the gateway by passing it objects of this type
 /// using `process.send` or `process.call` from `gleam/erlang/process`
 pub type GatewayAction {
-  Close
   SendHeartbeat
 }
 
@@ -355,18 +354,6 @@ fn handle_user_message(
   conn: Connection,
 ) -> Next(GatewayState, GatewayAction) {
   case msg {
-    Close -> {
-      case stratus.close(conn, stratus.Normal(<<"bot shutdown">>)) {
-        Error(_) ->
-          logging.log(
-            logging.Warning,
-            "Error when sending shutdown event to Discord",
-          )
-        _ -> Nil
-      }
-      logging.log(logging.Info, "Gateway stopped due to CLOSE")
-      stratus.stop()
-    }
     SendHeartbeat -> beat_heart(state, conn)
   }
 }
