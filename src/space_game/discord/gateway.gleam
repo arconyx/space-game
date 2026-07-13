@@ -434,26 +434,25 @@ fn handle_text_message(
       let handshake = case
         persistent_state.get_resume_state(state.persistent_state)
       {
-        Some(resume) ->
+        Some(resume) -> {
+          logging.log(logging.Debug, "Resuming from previous gateway session")
           Resume(state.token, resume.session_id, resume.sequence_number)
           |> send_event(conn, _)
-        None -> Identify(state.token) |> send_event(conn, _)
+        }
+        None -> {
+          logging.log(logging.Debug, "Starting new gateway session")
+          Identify(state.token) |> send_event(conn, _)
+        }
       }
       case handshake {
-        Ok(Nil) -> logging.log(logging.Debug, "Gateway resume/identify sent")
+        Ok(Nil) ->
+          logging.log(logging.Debug, "Gateway resume or identify event sent")
         Error(e) ->
           logging.log(
             logging.Error,
             "Gateway resume/identify failed:\n" <> string.inspect(e),
           )
       }
-
-      logging.log(
-        logging.Debug,
-        "Heart started with interval "
-          <> int.to_string(heartbeat_interval)
-          <> "ms",
-      )
 
       let state =
         GatewayState(..state, heartbeat_interval_ms: Some(heartbeat_interval))
@@ -463,6 +462,13 @@ fn handle_text_message(
       |> float.truncate()
       |> int.max(1)
       |> process.send_after(state.self, _, SendHeartbeat)
+
+      logging.log(
+        logging.Debug,
+        "Heart started with interval "
+          <> int.to_string(heartbeat_interval)
+          <> "ms",
+      )
 
       // Ok, so it isn't actually *ready* but it is close enough
       stratus.continue(GatewayState(..state, ready: True))
