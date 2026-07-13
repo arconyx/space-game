@@ -42,7 +42,6 @@ import stratus.{
 pub type GatewayAction {
   Close
   SendHeartbeat
-  IsReady(Subject(Bool))
 }
 
 /// Internal state of the gateway
@@ -56,7 +55,6 @@ type GatewayState {
     heartbeat_interval_ms: Option(Int),
     last_heartbeat_acknowledged: Bool,
     next_heartbeat: Option(process.Timer),
-    ready: Bool,
   )
 }
 
@@ -118,17 +116,6 @@ pub fn open(gateway: GatewayBuilder) {
   stratus.new_with_initialiser(request: req, init: fn() {
     // We use this to pass messages to the gateway from inside the gateway
     let self: Subject(GatewayAction) = process.new_subject()
-    let _ =
-      process.spawn(fn() {
-        process.sleep(5000)
-        case process.call(self, 500, IsReady) {
-          True -> logging.log(logging.Debug, "Kill switch disarmed")
-          False -> {
-            logging.log(logging.Warning, "Kill switch triggered")
-            panic
-          }
-        }
-      })
     GatewayState(
       gateway.token,
       gateway.persistent_state,
@@ -137,7 +124,6 @@ pub fn open(gateway: GatewayBuilder) {
       None,
       True,
       None,
-      False,
     )
     |> stratus.initialised()
     |> stratus.selecting(process.new_selector() |> process.select(self))
@@ -367,10 +353,6 @@ fn handle_user_message(
       stratus.stop()
     }
     SendHeartbeat -> beat_heart(state, conn)
-    IsReady(client) -> {
-      process.send(client, state.ready)
-      stratus.continue(state)
-    }
   }
 }
 
