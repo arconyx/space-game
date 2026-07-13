@@ -95,49 +95,56 @@ pub fn open(
   actor.Started(Subject(InternalMessage(GatewayAction))),
   actor.StartError,
 ) {
-  // Get the url Discord wants us to connect to, using the resume
-  // address if set
-  let url =
-    persistent_state.get_gateway_url(builder.persistent_state)
-    // Gleam chokes on 'ws' and 'wss' prefixes
-    // We deliberately upgrade ws/http to wss/https because eww unencrypted connection
-    |> string.replace("wss://", "https://")
-    |> string.replace("ws://", "https://")
-
-  // Construct initial websockets request
   let req =
-    request.to(url <> "?v=10&encoding=json")
-    |> result.replace_error(actor.InitFailed(
-      "Unable to parse websocket url " <> url,
-    ))
-  use req <- result.try(req)
-  let req = req |> api.default_headers
+    // Get the url Discord wants us to connect to, using the resume
+    // address if set
+    persistent_state.get_gateway_url(builder.persistent_state)
+    |> result.map_error(fn(reason) {
+      actor.InitFailed(
+        "Cannot start gateway. Do not revive flag is present in persistent state with reason: "
+        <> reason,
+      )
+    })
+    |> result.try(fn(url) {
+      // Gleam chokes on 'ws' and 'wss' prefixes
+      // We deliberately upgrade ws/http to wss/https because eww unencrypted connection
+      string.replace(url, "wss://", "https://")
+      |> string.replace("ws://", "https://")
+      |> string.append("?v=10&encoding=json")
+      |> request.to
+      |> result.replace_error(actor.InitFailed(
+        "Unable to parse websocket url " <> url,
+      ))
+    })
 
-  stratus.new_with_initialiser(request: req, init: fn() {
-    // We use this to pass messages to the gateway from inside the gateway
-    let self: Subject(GatewayAction) = process.new_subject()
-    GatewayState(
-      builder.token,
-      builder.persistent_state,
-      self,
-      None,
-      None,
-      True,
-      None,
-    )
-    |> stratus.initialised()
-    |> stratus.selecting(process.select(process.new_selector(), self))
-    |> Ok
-  })
-  |> stratus.on_message(fn(state, msg, conn) {
-    handle_messages(state, msg, conn, builder.handler)
-  })
-  |> stratus.on_close(on_close)
-  |> stratus.start()
-  |> result.map(fn(r) {
-    logging.log(logging.Debug, "Gateway started")
-    r
-  })
+  use req <- result.try(req)
+  let req = api.default_headers(req)
+
+  let stratus_builder =
+    stratus.new_with_initialiser(request: req, init: fn() {
+      // We use this to pass messages to the gateway from inside the gateway
+      let self: Subject(GatewayAction) = process.new_subject()
+      GatewayState(
+        builder.token,
+        builder.persistent_state,
+        self,
+        None,
+        None,
+        True,
+        None,
+      )
+      |> stratus.initialised()
+      |> stratus.selecting(process.select(process.new_selector(), self))
+      |> Ok
+    })
+    |> stratus.on_message(fn(state, msg, conn) {
+      handle_messages(state, msg, conn, builder.handler)
+    })
+    |> stratus.on_close(on_close)
+
+  use start_result <- result.map(stratus.start(stratus_builder))
+  logging.log(logging.Debug, "Gateway started")
+  start_result
 }
 
 /// Handle when the connection is closed without us requesting it
@@ -257,41 +264,50 @@ fn on_close(state: GatewayState, reason: stratus.CloseReason) -> Nil {
           logging.log(logging.Warning, "Discord closed gateway: timed out")
         4010 -> {
           logging.log(
-            logging.Warning,
+            logging.Error,
             "Discord closed gateway: invalid shard specified",
           )
-          // TODO: Does a panic really shutdown properly?
-          // Add a do-not-revive flag
-          panic as "Invalid shard specified"
+          persistent_state.stop_forever(
+            state.persistent_state,
+            "Invalid shard specified",
+          )
         }
         4011 -> {
-          persistent_state.clear_resume_state(state.persistent_state)
           logging.log(
             logging.Error,
             "Discord closed gateway: sharding required",
           )
-          panic as "Sharding required"
+          persistent_state.stop_forever(
+            state.persistent_state,
+            "Sharding required",
+          )
         }
         4012 -> {
-          persistent_state.clear_resume_state(state.persistent_state)
           logging.log(
             logging.Error,
             "Discord closed gateway: invalid api version",
           )
-          panic as "Invalid API version"
+          persistent_state.stop_forever(
+            state.persistent_state,
+            "Invalid API version",
+          )
         }
         4013 -> {
-          persistent_state.clear_resume_state(state.persistent_state)
           logging.log(logging.Error, "Discord closed gateway: invalid intent")
-          panic as "Invalid intent"
+          persistent_state.stop_forever(
+            state.persistent_state,
+            "Invalid intent",
+          )
         }
         4014 -> {
-          persistent_state.clear_resume_state(state.persistent_state)
           logging.log(
             logging.Error,
             "Discord closed gateway: disallowed intent",
           )
-          panic as "Disallowed intent"
+          persistent_state.stop_forever(
+            state.persistent_state,
+            "Disallowed intent",
+          )
         }
         code -> {
           logging.log(

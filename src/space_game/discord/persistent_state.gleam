@@ -1,5 +1,7 @@
 import booklet
+import gleam/erlang/process
 import gleam/option.{type Option, None, Some}
+import logging
 
 pub opaque type PersistentState {
   PersistentState(booklet: booklet.Booklet(State))
@@ -19,6 +21,7 @@ type State {
     resume_gateway_url: String,
     session_id: String,
   )
+  DoNotResume(reason: String)
 }
 
 pub fn init(initial_gateway_url: String) -> PersistentState {
@@ -27,10 +30,11 @@ pub fn init(initial_gateway_url: String) -> PersistentState {
   |> PersistentState
 }
 
-pub fn get_gateway_url(state: PersistentState) -> String {
+pub fn get_gateway_url(state: PersistentState) -> Result(String, String) {
   case booklet.get(state.booklet) {
-    Initial(initial_gateway_url:, ..) -> initial_gateway_url
-    Resumable(resume_gateway_url:, ..) -> resume_gateway_url
+    Initial(initial_gateway_url:, ..) -> Ok(initial_gateway_url)
+    Resumable(resume_gateway_url:, ..) -> Ok(resume_gateway_url)
+    DoNotResume(reason) -> Error(reason)
   }
 }
 
@@ -69,14 +73,18 @@ pub fn set_resume_state(
       )
     Resumable(..) as current ->
       Resumable(..current, resume_gateway_url:, session_id:)
+    DoNotResume(..) as current -> current
   }
   |> booklet.set(state.booklet, _)
 }
 
 pub fn clear_resume_state(state: PersistentState) -> Nil {
-  booklet.get(state.booklet).initial_gateway_url
-  |> Initial(None)
-  |> booklet.set(state.booklet, _)
+  case booklet.get(state.booklet) {
+    Initial(initial_gateway_url:, ..) | Resumable(initial_gateway_url:, ..) ->
+      Initial(initial_gateway_url:, sequence_number: None)
+      |> booklet.set(state.booklet, _)
+    DoNotResume(_) -> Nil
+  }
 }
 
 pub fn update_sequence(
@@ -88,6 +96,19 @@ pub fn update_sequence(
       Initial(..current, sequence_number: Some(new_sequence_number))
     Resumable(..) as current ->
       Resumable(..current, sequence_number: Some(new_sequence_number))
+    DoNotResume(..) as current -> current
   }
   |> booklet.set(state.booklet, _)
+}
+
+/// Stop calling process and set flag in state booklet to prevent restarts.
+/// 
+/// This is intended for situations where Discord sends a disconnect and
+/// does not permit reconnecting, e.g. when we provide invalid auth values.
+/// 
+/// Expected to only be called by the gateway actor.
+pub fn stop_forever(state: PersistentState, reason: String) -> Nil {
+  logging.log(logging.Debug, "Gateway Do-Not-Restart triggered")
+  booklet.set(state.booklet, DoNotResume(reason))
+  process.send_abnormal_exit(process.self(), reason)
 }
