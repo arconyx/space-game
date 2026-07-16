@@ -9,7 +9,6 @@ import cake/where
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/float
-import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/otp/actor
@@ -18,10 +17,11 @@ import gleam/string
 import gleam/time/duration
 import gleam/time/timestamp.{type Timestamp}
 import logging
-import space_game/database/connection
 import space_game/database/setup
+import space_game/database/write
 import space_game/game/player
 import space_game/game/waypoints.{type Waypoint}
+import space_game/utils/debug
 import sqlight.{type Connection}
 
 pub const table: String = "ships"
@@ -375,32 +375,38 @@ pub fn calculate_progress(
 }
 
 /// Update travel status of all ships
-fn refresh_all_ships(conn: Connection) -> Result(Nil, sqlight.Error) {
+fn refresh_all_ships(conn: Connection) -> Result(Nil, String) {
   // TODO: This needs optimising
   // We should be using the db to filter and applying all updates in
   // one go
   let now = timestamp.system_time()
-  case select_all_ships(conn) {
-    Ok(ships) ->
-      list.try_each(ships, fn(ship) {
-        case ship {
-          TravellingShip(departed_at:, departed_from:, destination:, ..) ->
-            case
-              calculate_progress(
-                current_time: now,
-                departed_at:,
-                departed_from:,
-                destination:,
-                ship_speed: speed(ship),
-              )
-            {
-              p if p >=. 1.0 -> set_location(conn, ship, destination)
-              _ -> Ok(Nil)
-            }
-          DockedShip(..) -> Ok(Nil)
-        }
-      })
-    Error(e) -> Error(e)
+  select_all_ships(conn)
+  |> result.try(list.try_each(_, refresh_ship(_, now, conn)))
+  |> debug.log_ok(logging.Debug, "Ships refreshed")
+  |> debug.log_error(logging.Error, "Unable to refresh ships", string.inspect)
+  |> result.replace_error("Unable to refresh ships")
+}
+
+fn refresh_ship(
+  ship: Ship,
+  now: Timestamp,
+  conn: Connection,
+) -> Result(Nil, sqlight.Error) {
+  case ship {
+    TravellingShip(departed_at:, departed_from:, destination:, ..) ->
+      case
+        calculate_progress(
+          current_time: now,
+          departed_at:,
+          departed_from:,
+          destination:,
+          ship_speed: speed(ship),
+        )
+      {
+        p if p >=. 1.0 -> set_location(conn, ship, destination)
+        _ -> Ok(Nil)
+      }
+    DockedShip(..) -> Ok(Nil)
   }
 }
 
@@ -411,7 +417,7 @@ pub type Message {
 pub type State {
   State(
     self: process.Subject(Message),
-    db: String,
+    writer: process.Subject(write.Message),
     period_ms: Int,
     next: option.Option(process.Timer),
   )
@@ -424,53 +430,29 @@ fn handle_message(state: State, msg: Message) -> actor.Next(State, a) {
       // so we clear the existing timer to maintain spacing.
       // This is a no-op if the timer has fired.
       option.map(state.next, process.cancel_timer)
-      case
-        connection.with_writable_connection(state.db, refresh_all_ships)
-        |> result.flatten()
-      {
-        Ok(Nil) -> {
-          logging.log(
-            logging.Debug,
-            "Ships refreshed. Next refresh in "
-              <> int.to_string(state.period_ms)
-              <> "ms",
-          )
-          let next =
-            process.send_after(state.self, state.period_ms, RefreshAll)
-            |> Some
-          State(..state, next:)
-          |> actor.continue()
-        }
-        Error(e) -> {
-          let delay = state.period_ms / 10
-          logging.log(
-            logging.Error,
-            "Ships refresh error:\n"
-              <> string.inspect(e)
-              <> "\nNext refresh in "
-              <> int.to_string(delay)
-              <> "ms",
-          )
-          let next =
-            process.send_after(state.self, delay, RefreshAll)
-            |> Some
-          State(..state, next:)
-          |> actor.continue()
-        }
-      }
+      write.call_writer(state.writer, refresh_all_ships)
+      let next =
+        process.send_after(state.self, state.period_ms, RefreshAll)
+        |> Some
+      State(..state, next:)
+      |> actor.continue()
     }
   }
 }
 
 pub fn make_ship_worker(
   name: process.Name(Message),
-  db: String,
+  writer: process.Name(write.Message),
   period_ms: Int,
 ) -> fn() -> Result(actor.Started(process.Subject(Message)), actor.StartError) {
   fn() {
-    let subject = process.named_subject(name)
     let worker =
-      actor.new(State(self: subject, db:, period_ms:, next: option.None))
+      actor.new(State(
+        self: process.named_subject(name),
+        writer: process.named_subject(writer),
+        period_ms:,
+        next: option.None,
+      ))
       |> actor.named(name)
       |> actor.on_message(handle_message)
       |> actor.start()

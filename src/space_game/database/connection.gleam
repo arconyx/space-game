@@ -36,13 +36,17 @@ import gleam/string
 import logging
 import sqlight.{type Connection}
 
+fn open_connection(path: String, mode: String) {
+  sqlight.open("file:" <> path <> "?mode=" <> mode)
+}
+
 /// Connect to a database in the specified mode
 fn with_connection(
   path: String,
   mode: String,
   callback: fn(Connection) -> a,
 ) -> Result(a, sqlight.Error) {
-  use conn <- result.try(sqlight.open("file:" <> path <> "?mode=" <> mode))
+  use conn <- result.try(open_connection(path, mode))
   let response = callback(conn)
   use _ <- result.map(sqlight.close(conn))
   response
@@ -63,6 +67,8 @@ pub fn with_readonly_connection(
 /// Connect with a read/write connection.
 ///
 /// Will NOT create the database if it doesn't already exist.
+/// 
+/// This warns but does not fail if it cannot enable foreign keys
 pub fn with_writable_connection(
   path: String,
   callback: fn(Connection) -> a,
@@ -85,63 +91,62 @@ pub fn with_writable_connection(
   })
 }
 
+/// Connect with a read/write connection.
+///
+/// Will NOT create the database if it doesn't already exist.
+/// Errors if it cannot enable foreign keys.
+pub fn open_writable_connection(
+  path: String,
+) -> Result(Connection, sqlight.Error) {
+  use conn <- result.try(open_connection(path, "rw"))
+  use _ <- result.map(sqlight.exec(
+    "PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA synchronous = NORMAL;",
+    conn,
+  ))
+  conn
+}
+
+pub type TransactionError(e) {
+  /// Transaction rolled back due to error in inner function
+  TransactionRolledBack(e)
+  /// Unable to begin transaction
+  TransactionBeginError(sqlight.Error)
+  /// Unable to commit transaction
+  TransactionCommitError(sqlight.Error)
+  /// Tried to roll back transaction but failed
+  TransactionRollbackError(rollback: sqlight.Error, query: e)
+}
+
 /// Run a sequence of database operations as a single transaction.
 ///
 /// If an error is returned the entire transaction is rolled back.
 /// This function returns a nested result, where the outer layer is Ok iff
 /// the change was committed or successfully rolled back and the inner layer
 /// represents if the supplied transaction function succeeded.
-/// 
-/// TODO: Flatten out result type with a dedicated error type
 pub fn as_transaction(
   conn: Connection,
-  transaction: fn() -> Result(a, b),
-) -> Result(Result(a, b), sqlight.Error) {
+  transaction: fn(Connection) -> Result(a, e),
+) -> Result(a, TransactionError(e)) {
   case sqlight.exec("BEGIN IMMEDIATE", conn) {
     Ok(_) -> {
-      logging.log(logging.Debug, "Database transaction started")
-      case transaction() {
-        Ok(v) ->
+      case transaction(conn) {
+        Ok(query_returning) ->
           case sqlight.exec("COMMIT", conn) {
-            Ok(_) -> {
-              logging.log(logging.Debug, "Database transaction succeeded")
-              Ok(v) |> Ok
-            }
-            Error(ce) -> {
-              logging.log(
-                logging.Error,
-                "Database transaction succeeded but commit failed",
-              )
-              Error(ce)
-            }
+            Ok(_) -> query_returning |> Ok
+            Error(commit_error) ->
+              commit_error |> TransactionCommitError |> Error
           }
-        Error(e) -> {
-          logging.log(
-            logging.Debug,
-            "Database transaction failed, rolling back",
-          )
+        Error(query_error) ->
           case sqlight.exec("ROLLBACK", conn) {
-            Ok(_) -> {
-              logging.log(logging.Debug, "Rollback succeeded")
-              e |> Error |> Ok
-            }
-            Error(re) -> {
-              logging.log(
-                logging.Critical,
-                "Rollback failed, database dirty!\nOriginal error was:\n"
-                  <> string.inspect(e)
-                  <> "\nRollback error was:\n"
-                  <> string.inspect(re),
-              )
-              re |> Error
-            }
+            Ok(_) -> query_error |> TransactionRolledBack |> Error
+
+            Error(rollback_error) ->
+              rollback_error
+              |> TransactionRollbackError(query: query_error)
+              |> Error
           }
-        }
       }
     }
-    Error(e) -> {
-      logging.log(logging.Error, "Unable to begin database transaction")
-      Error(e)
-    }
+    Error(begin_error) -> begin_error |> TransactionBeginError |> Error
   }
 }

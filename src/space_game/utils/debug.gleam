@@ -45,3 +45,31 @@ pub fn json_decode_error_to_string(error: json.DecodeError) -> String {
       )
   }
 }
+
+/// Log given message if the result is ok, then passthrough the result
+pub fn log_ok(result: Result(a, e), level: logging.LogLevel, message: String) {
+  case result {
+    Ok(_) -> logging.log(level, message)
+    Error(_) -> Nil
+  }
+  result
+}
+
+/// Log given message if the result is an error, including the stringified
+/// error, then passthrough the result
+pub fn log_error(
+  result: Result(a, e),
+  level: logging.LogLevel,
+  message: String,
+  error_decoder: fn(e) -> String,
+) {
+  case result {
+    Ok(_) -> Nil
+    Error(e) ->
+      logging.log(
+        level,
+        message <> "\nThe triggering error value is:\n" <> error_decoder(e),
+      )
+  }
+  result
+}

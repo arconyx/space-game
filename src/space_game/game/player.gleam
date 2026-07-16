@@ -1,15 +1,17 @@
 import cake/adapter/sqlite
+import cake/fragment
 import cake/insert
 import cake/select
 import cake/update
 import cake/where
 import gleam/dynamic/decode
+import gleam/erlang/process
 import gleam/int
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import logging
-import space_game/database/connection
 import space_game/database/setup
+import space_game/database/write
 import sqlight.{type Connection}
 
 pub const table = "players"
@@ -99,16 +101,32 @@ pub fn select_player(
   })
 }
 
-// TODO: Transaction history?
+/// Adds `|credit|` to account
+pub fn add_funds(conn: Connection, player_id: String, credit: Int) {
+  update_funds(conn, player_id, int.absolute_value(credit))
+}
 
-pub fn set_funds(
+/// Removes `|debit|` from account
+pub fn remove_funds(conn: Connection, player_id: String, debit: Int) {
+  update_funds(conn, player_id, debit |> int.absolute_value() |> int.negate())
+}
+
+/// Adds `delta` funds to account. 
+/// 
+/// If negative, funds will be removed. Prefer `add_funds` and `remove_funds`
+/// where possible to avoid issues with negative inputs.
+/// TODO: Transaction history?
+fn update_funds(
   conn: Connection,
   player_id: String,
-  new_balance: Int,
-) -> Result(Player, PurchaseError(_)) {
+  delta: Int,
+) -> Result(Player, AccountError) {
   update.new()
   |> update.table(table)
-  |> update.set(update.set_int("money", new_balance))
+  |> update.set(update.set_fragment(
+    "money",
+    fragment.prepared("money + ?", [fragment.int(delta)]),
+  ))
   |> update.where(where.col("discord_id") |> where.eq(where.string(player_id)))
   |> update.returning(["discord_id", "money"])
   |> update.to_query
@@ -117,14 +135,14 @@ pub fn set_funds(
   |> result.try(fn(players) {
     logging.log(
       logging.Debug,
-      "Set funds for " <> player_id <> " to " <> int.to_string(new_balance),
+      "Added " <> int.to_string(delta) <> " credits to user " <> player_id,
     )
     case players {
       [player] -> {
         echo player.money
         player |> Ok
       }
-      [] -> PlayerNotFound |> Error
+      [] -> player_id |> AccountNotFound |> Error
       [player, _, ..] -> {
         logging.log(
           logging.Warning,
@@ -136,23 +154,29 @@ pub fn set_funds(
   })
 }
 
-pub type PurchaseError(e) {
+pub type AccountError {
   InsufficentFunds(Int)
-  PlayerNotFound
+  AccountNotFound(id: String)
   SQL(sqlight.Error)
-  Generic(e)
 }
 
 /// Perform a database operation, subtracting funds from the player's account
 /// and gracefully rolling back errors.
-///
-/// Expects a writeable connection.
+/// 
+/// The transaction is rolled back if it leaves the player with negative funds
+/// or the inner `transaction` function returns an error. The `on_account_error`
+/// function is only called for the former case.
+/// 
+/// The supplied transaction is passed the player *after* the funds have been
+/// removed. It is run in the writer process.
 pub fn with_cost(
-  conn: Connection,
+  writer: process.Subject(write.Message),
   player_id: String,
   cost: Int,
-  transaction inner: fn(Player) -> Result(a, e),
-) -> Result(a, PurchaseError(e)) {
+  on_account_error on_error: fn(AccountError) -> Nil,
+  transaction transaction: fn(Connection, Player) -> Result(Nil, String),
+) -> Nil {
+  use conn <- write.call_writer(writer)
   logging.log(
     logging.Debug,
     "Performing financial transaction for "
@@ -160,23 +184,17 @@ pub fn with_cost(
       <> " with cost "
       <> int.to_string(cost),
   )
-  // get player and check they have enough money
-  case select_player(conn, player_id) {
-    Ok(Some(Player(money:, ..))) if money < cost ->
-      InsufficentFunds(money) |> Error
-    // this is the case where they can afford the purchase
-    Ok(Some(Player(money:, ..))) -> {
-      {
-        use <- connection.as_transaction(conn)
-        set_funds(conn, player_id, money - cost)
-        |> result.try(fn(updated_player) {
-          inner(updated_player) |> result.map_error(Generic)
-        })
-      }
-      |> result.map_error(SQL)
-      |> result.flatten
+
+  remove_funds(conn, player_id, cost)
+  |> result.try(fn(player) {
+    case player.money {
+      balance if balance < 0 -> InsufficentFunds(balance) |> Error
+      _ -> Ok(player)
     }
-    Ok(None) -> PlayerNotFound |> Error
-    Error(e) -> SQL(e) |> Error
-  }
+  })
+  |> result.map_error(fn(error) {
+    on_error(error)
+    "Unable to deduct funds"
+  })
+  |> result.try(transaction(conn, _))
 }

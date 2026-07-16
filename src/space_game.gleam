@@ -37,6 +37,7 @@ import gleam/time/timestamp
 import logging
 import space_game/database/connection
 import space_game/database/setup
+import space_game/database/write
 import space_game/discord/api
 import space_game/discord/commands.{
   type SlashCommand, NestedCommand, Subcommand, TopLevelCommand,
@@ -58,7 +59,8 @@ pub type Context {
     bot: api.Bot,
     db: String,
     goods: dict.Dict(String, goods.Goods),
-    ship_refresh_actor: process.Name(ship.Message),
+    ship_refresh_actor: process.Subject(ship.Message),
+    writer: process.Subject(write.Message),
   )
 }
 
@@ -76,12 +78,16 @@ pub fn main() -> Nil {
   let assert Ok(discord_token) = envoy.get("SPACE_GAME_DISCORD_TOKEN")
   let assert Ok(guild_id) = envoy.get("SPACE_GAME_TEST_GUILD_ID")
 
+  let ship_refresh_name = process.new_name("ships")
+  let db_writer_name = process.new_name("writer")
+
   let ctx =
     Context(
       bot: api.new(id: discord_id, token: discord_token),
       db: database_path,
       goods: goods.goods_dict(goods.all_goods),
-      ship_refresh_actor: process.new_name("ships"),
+      ship_refresh_actor: process.named_subject(ship_refresh_name),
+      writer: process.named_subject(db_writer_name),
     )
 
   case setup.init_database(database_path, define_tables) {
@@ -101,10 +107,13 @@ pub fn main() -> Nil {
     |> static_supervisor.add(bot_worker_spec)
     |> static_supervisor.add(
       supervision.worker(ship.make_ship_worker(
-        ctx.ship_refresh_actor,
-        ctx.db,
+        ship_refresh_name,
+        db_writer_name,
         6 * 60 * 1000,
       )),
+    )
+    |> static_supervisor.add(
+      supervision.worker(fn() { write.create_writer(db_writer_name, ctx.db) }),
     )
     |> static_supervisor.start()
 
@@ -342,67 +351,93 @@ fn handle_balance_check(ctx: Context, event: InteractionEvent) -> Nil {
 fn handle_ship_purchase(ctx: Context, event: InteractionEvent) -> Nil {
   // Deferring the response displays a "bot is thinking" message
   // giving us 15 minutes to response instead of a few seconds.
-  use <- interactions.defer_response(ctx.bot, event, ephemeral: False)
-  let user = event.user
-  use <- catch_deferred_database_error()
-  use conn <- connection.with_writable_connection(ctx.db)
-  case { waypoints.select_all_waypoints(conn) |> result.map(list.shuffle) } {
-    Ok([]) -> ResponseUpdate("There are no waypoints to place your ship at")
-    Ok([location, ..]) -> {
-      // The assert is safe here because Discord enforces that the option is present.
-      // And if things go wrong and we *do* panic then the only impact is that the command
-      // fails.
-      //
-      // TODO: This option interface kinda sucks, see if we can rewrite options
-      // so we don't have to pattern match on type.
-      // Partition the dict into typed dicts?
-      // Yeah, then we can ditch the Option value wrapper.
-      let assert Ok(interactions.ValueStr(name)) =
-        event.options |> dict.get("name")
-      let new_ship =
-        ship.NewDockedShip(
-          name:,
-          owner_id: user.id,
-          cargo_capacity: 100,
-          speed: 10.0,
-          location:,
-        )
+  // TODO: Handle deferral error
+  let _ = interactions.send_deferral(ctx.bot, event, False)
+  let followup = interactions.edit_response(ctx.bot, event, _)
 
-      // We run the transaction using the `with_cost` transaction helper
-      case
-        player.with_cost(conn, user.id, 60_000, fn(_player) {
-          ship.insert_ships(conn, [new_ship])
-        })
-      {
-        Ok(_) -> {
-          logging.log(logging.Debug, "Sold ship to " <> user.id)
-          ResponseUpdate("Congratulations on your purchase.")
+  use conn, player <- player.with_cost(
+    ctx.writer,
+    event.user.id,
+    60_000,
+    fn(error) {
+      let _ =
+        case error {
+          player.InsufficentFunds(current_balance) ->
+            ResponseUpdate(
+              "You cannot afford this right now. Your current balance is "
+              <> int.to_string(current_balance)
+              <> " credits.",
+            )
+          player.AccountNotFound(..) ->
+            ResponseUpdate("You are not a registered trader.")
+          player.SQL(error) -> {
+            logging.log(
+              logging.Error,
+              "Unable to insert ship:\n" <> string.inspect(error),
+            )
+            ResponseUpdate("Unable to register your ship")
+          }
         }
-        Error(player.InsufficentFunds(bal)) ->
-          ResponseUpdate(
-            "You cannot afford this right now. Your current balance is "
-            <> int.to_string(bal)
-            <> " credits.",
-          )
-        Error(player.PlayerNotFound) ->
-          ResponseUpdate("You are not a registered trader.")
-        Error(e) -> {
-          logging.log(
-            logging.Error,
-            "Unable to insert ship:\n" <> string.inspect(e),
-          )
-          ResponseUpdate("Unable to register your ship")
-        }
-      }
-    }
+        |> followup()
+      Nil
+    },
+  )
+
+  case waypoints.select_all_waypoints(conn) |> result.map(list.shuffle) {
     Error(e) -> {
       logging.log(
         logging.Error,
         "Unable to fetch waypoints list:\n" <> string.inspect(e),
       )
-      ResponseUpdate(
-        "We've lost our maps so we are unable to deliver your ship.",
-      )
+      let _ =
+        ResponseUpdate(
+          "We've lost our maps so we are unable to deliver your ship.",
+        )
+        |> followup()
+      Error("Unable to load waypoints")
+    }
+    Ok([]) -> {
+      let _ =
+        ResponseUpdate("There are no waypoints to place your ship at")
+        |> followup()
+      Error("No waypoints")
+    }
+    Ok([location, ..]) -> {
+      // The assert is safe here because Discord enforces that the option is
+      // present. And if things go wrong and we *do* panic then the only
+      // impact is that the write fails.
+      // TODO: This option interface sucks, see if we can rewrite options
+      // so we don't have to pattern match on type.
+      // Partition the dict into typed dicts?
+      // Yeah, then we can ditch the Option value wrapper.
+      let assert Ok(interactions.ValueStr(name)) =
+        event.options |> dict.get("name")
+
+      let new_ship =
+        ship.NewDockedShip(
+          name:,
+          owner_id: player.discord_id,
+          cargo_capacity: 100,
+          speed: 10.0,
+          location:,
+        )
+
+      case ship.insert_ships(conn, [new_ship]) {
+        Ok(_) -> {
+          logging.log(logging.Debug, "Sold ship to " <> player.discord_id)
+          let _ =
+            ResponseUpdate("Congratulations on your purchase.") |> followup()
+          Ok(Nil)
+        }
+        Error(e) -> {
+          logging.log(
+            logging.Error,
+            "Unable to insert ship: " <> string.inspect(e),
+          )
+          let _ = ResponseUpdate("Your ship was lost in transit.") |> followup()
+          Error("Unable to insert new ship")
+        }
+      }
     }
   }
 }
@@ -542,7 +577,7 @@ pub fn handle_travel_start(ctx: Context, event: InteractionEvent) -> Nil {
           // Start a background process responsible for updating flight status
           // on arrival
           process.send_after(
-            ctx.ship_refresh_actor |> process.named_subject,
+            ctx.ship_refresh_actor,
             duration.to_seconds(time) *. 1000.0 +. 100.0
               |> float.ceiling
               |> float.truncate,

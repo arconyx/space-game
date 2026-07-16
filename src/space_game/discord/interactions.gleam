@@ -338,7 +338,7 @@ fn cook_interaction(
 }
 
 /// Send a deferred response notification to the server
-fn send_deferral(
+pub fn send_deferral(
   bot: Bot,
   event: InteractionEvent,
   ephemeral: Bool,
@@ -377,7 +377,7 @@ pub type ResponseUpdate {
 /// Edit the original interaction response
 ///
 /// This is commonly used after deferring the response.
-fn edit_response(
+pub fn edit_response(
   bot: Bot,
   event: InteractionEvent,
   up: ResponseUpdate,
