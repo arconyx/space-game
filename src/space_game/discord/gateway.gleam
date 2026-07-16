@@ -32,6 +32,7 @@ import stratus.{
   type Connection, type InternalMessage, type Message, type Next,
   type SocketReason,
 }
+import utils/debug
 
 /// Actions to be performed by the gateway
 ///
@@ -56,10 +57,6 @@ type GatewayState {
     last_heartbeat_acknowledged: Bool,
     next_heartbeat: Option(process.Timer),
   )
-}
-
-type Error {
-  JsonParse(json.DecodeError)
 }
 
 /// Construct an OTP child process for the bot
@@ -388,6 +385,35 @@ type InboundEvent {
   HeartbeatAck
 }
 
+/// Decode incoming JSON into a InboundEvent
+/// 
+/// [Opcode list](https://discord.com/developers/docs/topics/opcodes-and-status-codes#gateway)
+fn text_message_decoder() -> decode.Decoder(InboundEvent) {
+  use opcode <- decode.field("op", decode.int)
+  case opcode {
+    0 -> {
+      use data <- decode.field("d", decode.dynamic)
+      use name <- decode.field("t", decode.string)
+      use sequence <- decode.field("s", decode.int)
+      Dispatch(data:, sequence:, name:) |> decode.success
+    }
+    1 -> HeartbeatRequest |> decode.success
+    7 -> Reconnect |> decode.success
+    9 -> {
+      use resume <- decode.field("d", decode.bool)
+      InvalidSession(resume) |> decode.success
+    }
+    10 -> {
+      use interval <- decode.subfield(["d", "heartbeat_interval"], decode.int)
+      Hello(interval) |> decode.success
+    }
+    11 -> HeartbeatAck |> decode.success
+    // Introduce error type or return a result instead?
+    oc ->
+      decode.failure(HeartbeatRequest, "Unknown opcode: " <> int.to_string(oc))
+  }
+}
+
 /// Handle text messages received from Discord
 fn handle_text_message(
   state: GatewayState,
@@ -395,8 +421,7 @@ fn handle_text_message(
   conn: Connection,
   interaction_handler: fn(InteractionEvent) -> Nil,
 ) -> Next(GatewayState, GatewayAction) {
-  // logging.log(logging.Debug, "Got message:\n" <> msg)
-  case parse_text_message(msg) {
+  case json.parse(msg, text_message_decoder()) {
     Ok(Dispatch(data, sequence, name)) -> {
       // Update state in watcher
       persistent_state.update_sequence(state.persistent_state, sequence)
@@ -478,51 +503,15 @@ fn handle_text_message(
       GatewayState(..state, last_heartbeat_acknowledged: True)
       |> stratus.continue
     }
-    Error(JsonParse(e)) -> {
+    Error(e) -> {
       logging.log(
         logging.Error,
-        "Unable to parse message:\n" <> string.inspect(e),
+        "Could not decode JSON for gateway message:\n"
+          <> debug.json_decode_error_to_string(e),
       )
       stratus.continue(state)
     }
   }
-}
-
-/// Transform incoming JSON into a InboundEvent
-/// 
-/// [Opcode list](https://discord.com/developers/docs/topics/opcodes-and-status-codes#gateway)
-fn parse_text_message(msg: String) -> Result(InboundEvent, Error) {
-  let decoder = {
-    use opcode <- decode.field("op", decode.int)
-
-    case opcode {
-      0 -> {
-        use data <- decode.field("d", decode.dynamic)
-        use name <- decode.field("t", decode.string)
-        use sequence <- decode.field("s", decode.int)
-        Dispatch(data:, sequence:, name:) |> decode.success
-      }
-      1 -> HeartbeatRequest |> decode.success
-      7 -> Reconnect |> decode.success
-      9 -> {
-        use resume <- decode.field("d", decode.bool)
-        InvalidSession(resume) |> decode.success
-      }
-      10 -> {
-        use interval <- decode.subfield(["d", "heartbeat_interval"], decode.int)
-        Hello(interval) |> decode.success
-      }
-      11 -> HeartbeatAck |> decode.success
-      // Introduce error type or return a result instead?
-      oc ->
-        decode.failure(
-          HeartbeatRequest,
-          "Unknown opcode: " <> int.to_string(oc),
-        )
-    }
-  }
-
-  json.parse(msg, decoder) |> result.map_error(JsonParse)
 }
 
 /// Handle messages with the 0-DISPATCH opcode
