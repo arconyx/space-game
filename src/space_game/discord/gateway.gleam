@@ -51,8 +51,6 @@ type GatewayState {
     token: String,
     persistent_state: PersistentState,
     self: Subject(GatewayAction),
-    // we need this for heartbeats as well as resuming
-    sequence_number: Option(Int),
     heartbeat_interval_ms: Option(Int),
     last_heartbeat_acknowledged: Bool,
     next_heartbeat: Option(process.Timer),
@@ -142,7 +140,6 @@ fn open_gateway_connection(
         token:,
         persistent_state:,
         self:,
-        sequence_number: None,
         heartbeat_interval_ms: None,
         last_heartbeat_acknowledged: True,
         next_heartbeat: None,
@@ -423,11 +420,9 @@ fn handle_text_message(
 ) -> Next(GatewayState, GatewayAction) {
   case json.parse(msg, text_message_decoder()) {
     Ok(Dispatch(data, sequence, name)) -> {
-      // Update state in watcher
-      persistent_state.update_sequence(state.persistent_state, sequence)
-      handle_dispatch(data, name, state.persistent_state, interaction_handler)
       // Update sequence for heartbeat purposes
-      let state = GatewayState(..state, sequence_number: Some(sequence))
+      handle_dispatch(data, name, state.persistent_state, interaction_handler)
+      persistent_state.update_sequence(state.persistent_state, sequence)
       stratus.continue(state)
     }
     Ok(HeartbeatRequest) -> beat_heart(state, conn)
@@ -637,9 +632,13 @@ fn beat_heart(
       logging.log(logging.Warning, "Heartbeat not acknowledged, reconnecting")
       reconnect_and_resume(conn)
     }
+    // Send the next heartbeat
     True -> {
-      // Send the next heartbeat
-      case send_event(conn, Heartbeat(state.sequence_number)) {
+      case
+        persistent_state.get_sequence(state.persistent_state)
+        |> Heartbeat
+        |> send_event(conn, _)
+      {
         Ok(Nil) -> {
           logging.log(logging.Debug, "Sent heartbeat")
           GatewayState(..state, last_heartbeat_acknowledged: False)

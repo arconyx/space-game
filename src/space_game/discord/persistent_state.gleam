@@ -87,6 +87,14 @@ pub fn clear_resume_state(state: PersistentState) -> Nil {
   }
 }
 
+pub fn get_sequence(state: PersistentState) -> Option(Int) {
+  case booklet.get(state.booklet) {
+    Initial(sequence_number:, ..) | Resumable(sequence_number:, ..) ->
+      sequence_number
+    DoNotResume(_) -> None
+  }
+}
+
 pub fn update_sequence(
   state: PersistentState,
   new_sequence_number: Int,
