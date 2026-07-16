@@ -34,29 +34,6 @@ import stratus.{
   type SocketReason,
 }
 
-/// Actions to be performed by the gateway
-///
-/// This is a standard OTP style message type, but named action
-/// to avoid confusion with Discord messages.
-///
-/// Communicate with the gateway by passing it objects of this type
-/// using `process.send` or `process.call` from `gleam/erlang/process`
-pub type GatewayAction {
-  SendHeartbeat
-}
-
-/// Internal state of the gateway
-type GatewayState {
-  GatewayState(
-    token: String,
-    persistent_state: PersistentState,
-    self: Subject(GatewayAction),
-    heartbeat_interval_ms: Option(Int),
-    last_heartbeat_acknowledged: Bool,
-    next_heartbeat: Option(process.Timer),
-  )
-}
-
 /// Construct an OTP child process for the bot
 ///
 /// This handles maintaining a websockets connection to the
@@ -98,8 +75,35 @@ pub fn create_bot_spec(
   })
 }
 
+// ACTOR CONFIGURATION =========================================================
+
+/// Actions to be performed by the gateway
+///
+/// This is a standard OTP style message type, but named action
+/// to avoid confusion with Discord messages.
+///
+/// Communicate with the gateway by passing it objects of this type
+/// using `process.send` or `process.call` from `gleam/erlang/process`
+pub type GatewayAction {
+  SendHeartbeat
+}
+
+/// Internal state of the gateway
+type GatewayState {
+  GatewayState(
+    token: String,
+    persistent_state: PersistentState,
+    self: Subject(GatewayAction),
+    heartbeat_interval_ms: Option(Int),
+    last_heartbeat_acknowledged: Bool,
+    next_heartbeat: Option(process.Timer),
+  )
+}
+
 /// Open a connection to Discord using their Gateway protocol
 /// over websockets.
+/// 
+/// This creates and initialises a stratus actor.
 fn open_gateway_connection(
   discord_token token: String,
   interaction_handler handler: fn(InteractionEvent) -> Nil,
@@ -160,8 +164,10 @@ fn open_gateway_connection(
 
 /// Handle when the connection is closed without us requesting it
 /// 
-/// This function will panic when the close code suggests reconnection should
-/// be avoided.
+/// When the close reason indicates that Discord does not want us to resume or
+/// reconnect (e.g. when we supply invalid credentials) this function sets the
+/// persistent state to prohibit restarts then triggers an abnormal termination
+/// of the calling process.
 fn on_close(state: GatewayState, reason: stratus.CloseReason) -> Nil {
   case reason {
     // We are allowed to resume when the gateway is closed without a code
@@ -330,12 +336,19 @@ fn on_close(state: GatewayState, reason: stratus.CloseReason) -> Nil {
   }
 }
 
+/// Converts a bit array to string. If the array is not valid UTF-8 then it
+/// returns a string reporting the error.
+/// 
+/// The error message is specialised for use in the `on_close` method and may
+/// not be appropriate for general use.
 fn safe_bit_array_to_string(array: BitArray) -> String {
   bit_array.to_string(array)
-  |> result.unwrap("Unable to decode bit array associated with error")
+  |> result.unwrap(
+    "Unable to decode bit array associated with error as it not valid UTF-8 data.",
+  )
 }
 
-/// Top level handler for messages recieved by the stratus actor
+/// Top level handler for messages recieved by the stratus actor.
 /// 
 /// These may be websocket messages received from the server (Text, Binary)
 /// or user supplied messages (instructions) sent locally (User)
@@ -357,9 +370,9 @@ fn handle_messages(
   }
 }
 
-/// Handle messages (GatewayAction) sent by the user to the actor
-///
-/// This handles, for instance, sending events to Discord
+/// Handle messages (GatewayAction) sent by the user to the actor. This is used
+/// to trigger sending heartbeats to Discord and can be extended for other actor
+/// controls.
 fn handle_user_message(
   state: GatewayState,
   msg: GatewayAction,
@@ -370,9 +383,11 @@ fn handle_user_message(
   }
 }
 
+// INBOUND EVENTS ==============================================================
+
 /// A Discord gateway event, minimally parsed
 /// 
-/// See [Discord documentation](https://discord.com/developers/docs/events/gateway-events)
+/// See [Discord's documentation](https://discord.com/developers/docs/events/gateway-events)
 type InboundEvent {
   Dispatch(data: Dynamic, sequence: Int, name: String)
   HeartbeatRequest
@@ -405,9 +420,7 @@ fn text_message_decoder() -> decode.Decoder(InboundEvent) {
       Hello(interval) |> decode.success
     }
     11 -> HeartbeatAck |> decode.success
-    // Introduce error type or return a result instead?
-    oc ->
-      decode.failure(HeartbeatRequest, "Unknown opcode: " <> int.to_string(oc))
+    _ -> decode.failure(HeartbeatRequest, expected: "Valid opcode")
   }
 }
 
@@ -426,9 +439,7 @@ fn handle_text_message(
       stratus.continue(state)
     }
     Ok(HeartbeatRequest) -> beat_heart(state, conn)
-    // reconnecting may involve a resume https://discord.com/developers/docs/events/gateway#resuming
-    // This will probably be a "set flag then terminate", allowing the supervisor to bring it back up
-    // Yet another point for a second actor just hosting state
+    // Discord documents that the Reconnect message permits resuming
     Ok(Reconnect) -> reconnect_and_resume(conn)
     Ok(InvalidSession(resume)) ->
       case resume {
@@ -444,14 +455,14 @@ fn handle_text_message(
             logging.Warning,
             "Invalid session reported, full reconnect requested",
           )
-          let _ = stratus.close(conn, stratus.Normal(<<"invalid session">>))
           persistent_state.clear_resume_state(state.persistent_state)
+          let _ = stratus.close(conn, stratus.Normal(<<"invalid session">>))
           stratus.stop_abnormal("invalid session")
         }
       }
-    // Respond with identify
+    // Respond to Hello with Identify
     Ok(Hello(heartbeat_interval)) -> {
-      logging.log(logging.Debug, "Got hello from Discord")
+      logging.log(logging.Debug, "Got Hello from Discord")
       // If we're resuming send a resume instead of an identify
       let handshake = case
         persistent_state.get_resume_state(state.persistent_state)
@@ -466,6 +477,8 @@ fn handle_text_message(
           Identify(state.token) |> send_event(conn, _)
         }
       }
+
+      // Log the state of the identify event
       case handshake {
         Ok(Nil) ->
           logging.log(logging.Debug, "Gateway resume or identify event sent")
@@ -477,9 +490,11 @@ fn handle_text_message(
           )
       }
 
+      // Discord now expects us to send heartbeats at a regular interval
       // Apply some jitter to the first sleep as instructed by Discord
       int.to_float(heartbeat_interval) *. float.random()
       |> float.truncate()
+      // This looks weird to me every time, but it makes the sleep at least 1ms
       |> int.max(1)
       |> process.send_after(state.self, _, SendHeartbeat)
       logging.log(
@@ -492,7 +507,8 @@ fn handle_text_message(
       GatewayState(..state, heartbeat_interval_ms: Some(heartbeat_interval))
       |> stratus.continue()
     }
-    // Record heartbeat acknowledgements
+    // We need to record heartbeat acknowledgements because missing one is
+    // grounds for a reconnect.
     Ok(HeartbeatAck) -> {
       logging.log(logging.Debug, "Heartbeat acknowledged")
       GatewayState(..state, last_heartbeat_acknowledged: True)
@@ -509,7 +525,8 @@ fn handle_text_message(
   }
 }
 
-/// Handle messages with the 0-DISPATCH opcode
+/// Handle messages with the 0-DISPATCH opcode. Discord uses this for most
+/// messages where they want to send data.
 fn handle_dispatch(
   data: Dynamic,
   name: String,
@@ -534,8 +551,11 @@ fn handle_dispatch(
       logging.log(logging.Info, "Gateway ready")
     }
     "RESUMED" -> logging.log(logging.Info, "Gateway resumed")
-    // This should basically never happen given we have very few reasons to send requests
+    // This should basically never happen given we have very few reasons to send
+    // requests. In particular it is for rate limited events like 'Request Guild
+    // Members', which we don't use.
     "RATE_LIMITED" -> logging.log(logging.Warning, "Rate limit reached")
+    // The key event - this handles command invocations and the like
     "INTERACTION_CREATE" ->
       case interactions.parse_event(data) {
         Ok(i) -> interaction_handler(i)
@@ -550,7 +570,7 @@ fn handle_dispatch(
   }
 }
 
-// TODO: Cache sequence numbers somewhere so we ensure we don't handle them twice if we get them a second time
+// OUTBOUND EVENTS =============================================================
 
 /// Events we send to the server over the gateway
 ///
@@ -565,7 +585,7 @@ type OutboundError {
   Socket(SocketReason)
 }
 
-/// Construct a message from opcode and data then send it to the server
+/// Construct a message from opcode and json data then send it to the server
 fn raw_send_event(
   conn: Connection,
   opcode: Int,
@@ -585,28 +605,30 @@ fn send_event(
   case event {
     Heartbeat(seq) -> raw_send_event(conn, 1, json.nullable(seq, json.int))
     Identify(token) -> {
-      // Ok, so our OS isn't gleam but it's a decent approximation that
-      // doesn't involve trying to identify the actual OS
-      let properties =
-        json.object([
-          #("os", json.string("gleam")),
-          #("browser", json.string("space-game")),
-          #("device", json.string("space-game")),
-        ])
-      // TODO: Set custom activity
-      let presence =
-        json.object([
-          #("since", json.null()),
-          #("activities", json.object([])),
-          #("status", json.string("online")),
-          #("afk", json.bool(False)),
-        ])
       json.object([
         #("token", json.string(token)),
-        #("properties", properties),
+        #(
+          "properties",
+          json.object([
+            // Ok, so our OS isn't gleam but it's a decent approximation that
+            // doesn't involve trying to identify the actual OS
+            #("os", json.string("gleam")),
+            #("browser", json.string("space-game")),
+            #("device", json.string("space-game")),
+          ]),
+        ),
         // TODO: Look into compression
         #("compress", json.bool(False)),
-        #("presence", presence),
+        #(
+          "presence",
+          json.object([
+            #("since", json.null()),
+            // TODO: Set custom activity
+            #("activities", json.object([])),
+            #("status", json.string("online")),
+            #("afk", json.bool(False)),
+          ]),
+        ),
         #("intents", json.int(0)),
       ])
       |> raw_send_event(conn, 2, _)
@@ -620,6 +642,8 @@ fn send_event(
       |> raw_send_event(conn, 6, _)
   }
 }
+
+// HEARTBEATS ==================================================================
 
 /// Send heartbeat to server
 fn beat_heart(

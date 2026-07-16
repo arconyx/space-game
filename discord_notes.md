@@ -90,7 +90,7 @@ Returned when a websockets connection is closed.
 We should handle all the ones listed by [Discord](https://discord.com/developers/docs/topics/opcodes-and-status-codes#gateway-gateway-close-event-codes). Some require reconnecting,
 others don't.
 
-We can return code 1000 or 1002 to alert Discord to a connection closure if we do not intend to reconnect (but it will also time out after a few minutes).
+We can return code 1000 or 1001 to alert Discord to a connection closure if we do not intend to reconnect (but it will also time out after a few minutes).
 
 # Design Notes
 - Spawn a dedicated process to send heartbeats every N ms. It can just sleep between sends. Supervise it because we don't want it to die.
