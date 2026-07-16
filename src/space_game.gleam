@@ -37,10 +37,10 @@ import gleam/time/timestamp
 import logging
 import space_game/database
 import space_game/discord/api
-import space_game/discord/bot
 import space_game/discord/commands.{
   type SlashCommand, NestedCommand, Subcommand, TopLevelCommand,
 }
+import space_game/discord/gateway
 import space_game/discord/interactions.{
   type InteractionEvent, ResponseUpdate, StandaloneResponse,
 }
@@ -89,15 +89,15 @@ pub fn main() -> Nil {
       panic as { "Unable to initalise database: " <> string.inspect(e) }
   }
 
-  let assert Ok(bot_worker) =
-    bot.create(discord_token, fn(event) {
+  let assert Ok(bot_worker_spec) =
+    gateway.create_bot_spec(discord_token, fn(event) {
       // embedding the context + bot with a closure
       command_handler(ctx, event)
     })
 
   let assert Ok(_) =
     static_supervisor.new(static_supervisor.OneForOne)
-    |> static_supervisor.add(bot_worker)
+    |> static_supervisor.add(bot_worker_spec)
     |> static_supervisor.add(
       supervision.worker(ship.make_ship_worker(
         ctx.ship_refresh_actor,

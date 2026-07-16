@@ -13,7 +13,7 @@
 
 import gleam/bit_array
 import gleam/dynamic/decode.{type Dynamic}
-import gleam/erlang/process.{type Pid, type Subject}
+import gleam/erlang/process.{type Subject}
 import gleam/float
 import gleam/http
 import gleam/http/request
@@ -21,6 +21,7 @@ import gleam/int
 import gleam/json.{type Json}
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
+import gleam/otp/supervision
 import gleam/result
 import gleam/string
 import logging
@@ -50,7 +51,7 @@ type GatewayState {
     persistent_state: PersistentState,
     self: Subject(GatewayAction),
     // we need this for heartbeats as well as resuming
-    sequence: Option(Int),
+    sequence_number: Option(Int),
     heartbeat_interval_ms: Option(Int),
     last_heartbeat_acknowledged: Bool,
     next_heartbeat: Option(process.Timer),
@@ -61,43 +62,60 @@ type Error {
   JsonParse(json.DecodeError)
 }
 
-pub type Gateway {
-  Gateway(pid: Pid, subject: Subject(InternalMessage(GatewayAction)))
-}
-
-/// Everything we need to know to start a gateway
+/// Construct an OTP child process for the bot
+///
+/// This handles maintaining a websockets connection to the
+/// Discord gateway, over which we receive interactions when
+/// users use commands.
 /// 
-/// The token is a Discord auth token
-/// The handler is a function that accepts and processes interactions (i.e. /commands)
-pub type GatewayBuilder {
-  GatewayBuilder(
-    url: String,
-    token: String,
-    persistent_state: PersistentState,
-    handler: fn(InteractionEvent) -> Nil,
+/// This can error when we are unable to retrieve the websocket
+/// address for the gateway.
+pub fn create_bot_spec(
+  discord_token: String,
+  interaction_handler: fn(InteractionEvent) -> Nil,
+) -> Result(
+  supervision.ChildSpecification(
+    process.Subject(stratus.InternalMessage(GatewayAction)),
+  ),
+  api.Error,
+) {
+  // Ask Discord for the gateway address to connect to.
+  // They say we should cache this and use it when reconnecting.
+  // However when resuming we should instead use the resume gateway address
+  // supplied in the `Ready` event. The persistent_state we initialise
+  // below handles storing these values for us.
+  use gateway_url <- result.map(
+    api.request(discord_token, http.Get, "/gateway/bot", None)
+    |> api.send_and_decode(decode.at(["url"], decode.string)),
   )
-}
 
-/// Get websockets address used to connect to Discord
-/// 
-/// Discord supplies the address in the response to a GET
-pub fn get_websocket_address(token: String) -> Result(String, api.Error) {
-  api.request(token, http.Get, "/gateway/bot", None)
-  |> api.send_and_decode(decode.at(["url"], decode.string))
+  // We init the persistent state outside the closure so the value
+  // gets captured rather than initialising a new booklet on every
+  // start.
+  let persistent_state = persistent_state.init(gateway_url)
+
+  supervision.worker(fn() {
+    open_gateway_connection(
+      discord_token:,
+      interaction_handler:,
+      persistent_state:,
+    )
+  })
 }
 
 /// Open a connection to Discord using their Gateway protocol
-/// over websockets
-pub fn open(
-  builder: GatewayBuilder,
+/// over websockets.
+fn open_gateway_connection(
+  discord_token token: String,
+  interaction_handler handler: fn(InteractionEvent) -> Nil,
+  persistent_state persistent_state: PersistentState,
 ) -> Result(
   actor.Started(Subject(InternalMessage(GatewayAction))),
   actor.StartError,
 ) {
   let req =
-    // Get the url Discord wants us to connect to, using the resume
-    // address if set
-    persistent_state.get_gateway_url(builder.persistent_state)
+    // Get the url Discord wants us to connect to, using the resume address if set
+    persistent_state.get_gateway_url(persistent_state)
     |> result.map_error(fn(reason) {
       actor.InitFailed(
         "Cannot start gateway. Do not revive flag is present in persistent state with reason: "
@@ -124,20 +142,20 @@ pub fn open(
       // We use this to pass messages to the gateway from inside the gateway
       let self: Subject(GatewayAction) = process.new_subject()
       GatewayState(
-        builder.token,
-        builder.persistent_state,
-        self,
-        None,
-        None,
-        True,
-        None,
+        token:,
+        persistent_state:,
+        self:,
+        sequence_number: None,
+        heartbeat_interval_ms: None,
+        last_heartbeat_acknowledged: True,
+        next_heartbeat: None,
       )
       |> stratus.initialised()
       |> stratus.selecting(process.select(process.new_selector(), self))
       |> Ok
     })
     |> stratus.on_message(fn(state, msg, conn) {
-      handle_messages(state, msg, conn, builder.handler)
+      handle_messages(state, msg, conn, handler)
     })
     |> stratus.on_close(on_close)
 
@@ -384,7 +402,7 @@ fn handle_text_message(
       persistent_state.update_sequence(state.persistent_state, sequence)
       handle_dispatch(data, name, state.persistent_state, interaction_handler)
       // Update sequence for heartbeat purposes
-      let state = GatewayState(..state, sequence: Some(sequence))
+      let state = GatewayState(..state, sequence_number: Some(sequence))
       stratus.continue(state)
     }
     Ok(HeartbeatRequest) -> beat_heart(state, conn)
@@ -632,7 +650,7 @@ fn beat_heart(
     }
     True -> {
       // Send the next heartbeat
-      case send_event(conn, Heartbeat(state.sequence)) {
+      case send_event(conn, Heartbeat(state.sequence_number)) {
         Ok(Nil) -> {
           logging.log(logging.Debug, "Sent heartbeat")
           GatewayState(..state, last_heartbeat_acknowledged: False)

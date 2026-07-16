@@ -11,14 +11,6 @@ description = "A slow space trading game over Discord"
 licences = ["MIT"]
 repository = { type = "github", user = "arconyx", repo = "space-game" }
 
-# Excluded from documentation
-# internal_modules = [
-#   "discord/api",
-#   "discord/gatehouse",
-#   "discord/gateway",
-#   "discord/watcher"
-# ]
-
 [dependencies]
 gleam_stdlib = ">= 1.0.3 and < 2.0.0"
 sqlight = ">= 1.0.2 and < 2.0.0"
