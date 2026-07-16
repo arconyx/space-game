@@ -8,7 +8,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import space_game/discord/api.{type Bot}
-import utils/non_empty_lists.{type NonEmptyList}
+import space_game/utils/non_empty_lists.{type NonEmptyList}
 
 /// The contexts in which a command can be invoked
 ///

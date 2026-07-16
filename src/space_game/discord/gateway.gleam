@@ -28,11 +28,11 @@ import logging
 import space_game/discord/api
 import space_game/discord/interactions.{type InteractionEvent}
 import space_game/discord/persistent_state.{type PersistentState}
+import space_game/utils/debug
 import stratus.{
   type Connection, type InternalMessage, type Message, type Next,
   type SocketReason,
 }
-import utils/debug
 
 /// Actions to be performed by the gateway
 ///

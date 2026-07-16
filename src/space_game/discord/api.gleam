@@ -16,7 +16,7 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import logging
-import utils/debug
+import space_game/utils/debug
 
 /// The bot.
 ///
