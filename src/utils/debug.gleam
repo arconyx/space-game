@@ -1,4 +1,4 @@
-//// Utilities for monitoring performance
+//// Utilities for debug logging and the like
 
 import gleam/int
 import logging
