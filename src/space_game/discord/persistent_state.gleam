@@ -1,8 +1,18 @@
+//// The websockets connection to the Discord gateway must cache some data
+//// across restarts. This module provides methods to store and access these
+//// values in an ETS table, using the `PersistentState` object to hold a
+//// reference to their location.
+//// 
+//// These functions are only used by the `space_game/discord/gateway` module
+//// but live here so that type opacity can be used to inforce invariants and
+//// trigger side-effects with no possiblity of bypass.
+
 import booklet
 import gleam/erlang/process
 import gleam/option.{type Option, None, Some}
 import logging
 
+/// Holds a reference to the persistent state in an ETS table.
 pub opaque type PersistentState {
   PersistentState(booklet: booklet.Booklet(State))
 }
@@ -24,12 +34,15 @@ type State {
   DoNotResume(reason: String)
 }
 
+/// Create a new state object.
 pub fn init(initial_gateway_url: String) -> PersistentState {
   Initial(initial_gateway_url:, sequence_number: None)
   |> booklet.new()
   |> PersistentState
 }
 
+/// Get the gateway url. This returns the resume gateway if present, else the
+/// initial gateway.
 pub fn get_gateway_url(state: PersistentState) -> Result(String, String) {
   case booklet.get(state.booklet) {
     Initial(initial_gateway_url:, ..) -> Ok(initial_gateway_url)
@@ -38,6 +51,9 @@ pub fn get_gateway_url(state: PersistentState) -> Result(String, String) {
   }
 }
 
+/// Holds the information required to resume a session.
+/// 
+/// This gets a dedicated object to avoid mixing up the strings.
 pub type ResumeState {
   ResumeState(
     resume_gateway_url: String,
@@ -46,6 +62,10 @@ pub type ResumeState {
   )
 }
 
+/// Fetch all the information required to resume a session.
+/// 
+/// If this returns some value then resumption should be attempted. Else perform
+/// a standard reconnect.
 pub fn get_resume_state(state: PersistentState) -> Option(ResumeState) {
   case booklet.get(state.booklet) {
     Resumable(
@@ -58,6 +78,8 @@ pub fn get_resume_state(state: PersistentState) -> Option(ResumeState) {
   }
 }
 
+/// Store the session resumption configuration provided by Discord in the READY
+/// event.
 pub fn set_resume_state(
   state: PersistentState,
   resume_gateway_url: String,
@@ -78,6 +100,12 @@ pub fn set_resume_state(
   |> booklet.set(state.booklet, _)
 }
 
+/// Clear all persistent resume state.
+/// 
+/// Future callers to `get_resume_state` will be returned `None`, signaling to
+/// begin a fresh session instead of resuming. As such this function should be
+/// called when the gateway is disconnected in such a manner that Discord
+/// prohibits reconnection.
 pub fn clear_resume_state(state: PersistentState) -> Nil {
   case booklet.get(state.booklet) {
     Initial(initial_gateway_url:, ..) | Resumable(initial_gateway_url:, ..) ->
@@ -87,6 +115,9 @@ pub fn clear_resume_state(state: PersistentState) -> Nil {
   }
 }
 
+/// Get the last sequence number seen in a Dispatch message.
+/// 
+/// This is always the latest value seen, not the largest.
 pub fn get_sequence(state: PersistentState) -> Option(Int) {
   case booklet.get(state.booklet) {
     Initial(sequence_number:, ..) | Resumable(sequence_number:, ..) ->
@@ -95,10 +126,8 @@ pub fn get_sequence(state: PersistentState) -> Option(Int) {
   }
 }
 
-pub fn update_sequence(
-  state: PersistentState,
-  new_sequence_number: Int,
-) -> Nil {
+/// Store the provided sequence value, overwriting the previous value.
+pub fn set_sequence(state: PersistentState, new_sequence_number: Int) -> Nil {
   case booklet.get(state.booklet) {
     Initial(..) as current ->
       Initial(..current, sequence_number: Some(new_sequence_number))
@@ -110,13 +139,17 @@ pub fn update_sequence(
 }
 
 /// Stop calling process and set flag in state booklet to prevent restarts.
+/// The event is logged.
 /// 
 /// This is intended for situations where Discord sends a disconnect and
 /// does not permit reconnecting, e.g. when we provide invalid auth values.
 /// 
 /// Expected to only be called by the gateway actor.
 pub fn stop_forever(state: PersistentState, reason: String) -> Nil {
-  logging.log(logging.Debug, "Gateway Do-Not-Restart triggered")
+  logging.log(
+    logging.Debug,
+    "Gateway Do-Not-Restart set. The calling process will exit and restarts will be blocked.",
+  )
   booklet.set(state.booklet, DoNotResume(reason))
   process.send_abnormal_exit(process.self(), reason)
 }

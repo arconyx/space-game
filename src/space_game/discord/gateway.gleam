@@ -422,7 +422,7 @@ fn handle_text_message(
     Ok(Dispatch(data, sequence, name)) -> {
       // Update sequence for heartbeat purposes
       handle_dispatch(data, name, state.persistent_state, interaction_handler)
-      persistent_state.update_sequence(state.persistent_state, sequence)
+      persistent_state.set_sequence(state.persistent_state, sequence)
       stratus.continue(state)
     }
     Ok(HeartbeatRequest) -> beat_heart(state, conn)
