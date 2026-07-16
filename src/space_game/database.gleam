@@ -71,7 +71,12 @@ pub fn with_writable_connection(
   callback: fn(Connection) -> a,
 ) -> a {
   with_connection(path, "rw", fn(conn) {
-    case sqlight.exec("PRAGMA foreign_keys = ON;", conn) {
+    case
+      sqlight.exec(
+        "PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA synchronous = NORMAL;",
+        conn,
+      )
+    {
       Ok(_) -> Nil
       Error(e) ->
         logging.log(
@@ -93,7 +98,7 @@ pub fn as_transaction(
   conn: Connection,
   transaction: fn() -> Result(a, b),
 ) -> Result(Result(a, b), sqlight.Error) {
-  case sqlight.exec("BEGIN", conn) {
+  case sqlight.exec("BEGIN IMMEDIATE", conn) {
     Ok(_) -> {
       logging.log(logging.Debug, "Database transaction started")
       case transaction() {
