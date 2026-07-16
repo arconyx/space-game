@@ -12,11 +12,11 @@ import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
 import gleam/int
 import gleam/json.{type Json}
-import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import logging
+import utils/debug
 
 /// The bot.
 ///
@@ -213,26 +213,6 @@ pub fn error_to_string(error: Error) -> String {
       }
     DecodeError(decode_error) ->
       "Could not decode API response JSON: "
-      <> case decode_error {
-        json.UnexpectedEndOfInput -> "Unexpected end of input"
-        json.UnexpectedByte(byte) -> "Unexpected byte '" <> byte <> "'"
-        json.UnexpectedSequence(sequence) ->
-          "Unexpected sequence '" <> sequence <> "'"
-        json.UnableToDecode(decode_errors) ->
-          "\n"
-          <> string.join(
-            list.map(decode_errors, fn(error) {
-              let decode.DecodeError(expected:, found:, path:) = error
-              "Expected '"
-              <> expected
-              <> "' but found '"
-              <> found
-              <> "' at '"
-              <> string.join(path, with: ".")
-              <> "'"
-            }),
-            with: "\n",
-          )
-      }
+      <> debug.json_decode_error_to_string(decode_error)
   }
 }
