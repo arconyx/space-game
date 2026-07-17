@@ -31,19 +31,21 @@
 //// (so the caller uses `with_*_connection`) or accept a path string and call the
 //// connection wrapper themselves.
 
+import gleam/result
 import gleam/string
 import logging
 import sqlight.{type Connection}
 
 /// Connect to a database in the specified mode
-/// 
-/// This will panic if the connection cannot be opened or closed.
 fn with_connection(
   path: String,
   mode: String,
   callback: fn(Connection) -> a,
-) -> a {
-  sqlight.with_connection("file:" <> path <> "?mode=" <> mode, callback)
+) -> Result(a, sqlight.Error) {
+  use conn <- result.try(sqlight.open("file:" <> path <> "?mode=" <> mode))
+  let response = callback(conn)
+  use _ <- result.map(sqlight.close(conn))
+  response
 }
 
 /// Connect with a read only connection
@@ -51,23 +53,20 @@ fn with_connection(
 /// This optimises connecting by skipping applying pragma that only matter
 /// on write. We can have more read connections than write connections so favour this
 /// unles you actually need writing.
-/// 
-/// This will panic if the connection cannot be opened or closed.
 pub fn with_readonly_connection(
   path: String,
   callback: fn(Connection) -> a,
-) -> a {
+) -> Result(a, sqlight.Error) {
   with_connection(path, "ro", callback)
 }
 
 /// Connect with a read/write connection.
 ///
 /// Will NOT create the database if it doesn't already exist.
-/// This will panic if the connection cannot be opened or closed.
 pub fn with_writable_connection(
   path: String,
   callback: fn(Connection) -> a,
-) -> a {
+) -> Result(a, sqlight.Error) {
   with_connection(path, "rw", fn(conn) {
     case
       sqlight.exec(

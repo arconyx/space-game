@@ -229,10 +229,45 @@ fn command_handler(ctx: Context, event: InteractionEvent) {
   }
 }
 
+/// If the result is an error log it and return a generic error message
+/// as a Standalone Response
+fn catch_database_error(
+  fun: fn() -> Result(interactions.StandaloneResponse, sqlight.Error),
+) -> interactions.StandaloneResponse {
+  case fun() {
+    Ok(value) -> value
+    Error(_) -> {
+      logging.log(
+        logging.Error,
+        "We were unable to open or close a database connection",
+      )
+      StandaloneResponse("Error: Database connection failed", True)
+    }
+  }
+}
+
+/// If the result is an error log it and return a generic error message
+/// as a ResponseUpdate
+fn catch_deferred_database_error(
+  fun: fn() -> Result(interactions.ResponseUpdate, sqlight.Error),
+) -> interactions.ResponseUpdate {
+  case fun() {
+    Ok(value) -> value
+    Error(_) -> {
+      logging.log(
+        logging.Error,
+        "We were unable to open or close a database connection",
+      )
+      ResponseUpdate("Error: Database connection failed")
+    }
+  }
+}
+
 /// Register a new player
 fn handle_registration(ctx: Context, event: InteractionEvent) {
   use <- interactions.with_response(ctx.bot, event)
   // The return value of this block is used as the response
+  use <- catch_database_error()
   use conn <- connection.with_writable_connection(ctx.db)
   let user = event.user
   case player.select_player(conn, user.id) {
@@ -277,6 +312,7 @@ fn handle_registration(ctx: Context, event: InteractionEvent) {
 fn handle_balance_check(ctx: Context, event: InteractionEvent) {
   use <- interactions.with_response(ctx.bot, event)
   let user = event.user
+  use <- catch_database_error()
   use conn <- connection.with_readonly_connection(ctx.db)
   case player.select_player(conn, user.id) {
     Ok(Some(player)) ->
@@ -308,6 +344,7 @@ fn handle_ship_purchase(ctx: Context, event: InteractionEvent) {
   // giving us 15 minutes to response instead of a few seconds.
   use <- interactions.defer_response(ctx.bot, event, ephemeral: False)
   let user = event.user
+  use <- catch_deferred_database_error()
   use conn <- connection.with_writable_connection(ctx.db)
   case { waypoints.select_all_waypoints(conn) |> result.map(list.shuffle) } {
     Ok([]) -> ResponseUpdate("There are no waypoints to place your ship at")
@@ -426,6 +463,7 @@ fn waypoint_to_string(waypoint: waypoints.Waypoint, ship: ship.Ship) -> String {
 /// Print a list of waypoints with travel time information
 fn handle_list_waypoints(ctx: Context, event: InteractionEvent) {
   use <- interactions.defer_response(ctx.bot, event, True)
+  use <- catch_deferred_database_error()
   use conn <- connection.with_readonly_connection(ctx.db)
   // Get a player's ships, if they have any.
   // This command works even for unregistered players and players without ships
@@ -482,6 +520,7 @@ fn handle_list_waypoints(ctx: Context, event: InteractionEvent) {
 pub fn handle_travel_start(ctx: Context, event: InteractionEvent) {
   use <- interactions.defer_response(ctx.bot, event, True)
   let user = event.user
+  use <- catch_deferred_database_error()
   use conn <- connection.with_writable_connection(ctx.db)
   // TODO: Better option handling
   let assert Ok(interactions.ValueStr(name)) =

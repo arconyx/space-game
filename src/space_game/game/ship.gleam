@@ -416,7 +416,10 @@ fn handle_message(state: State, msg: Message) -> actor.Next(State, a) {
       // so we clear the existing timer to maintain spacing.
       // This is a no-op if the timer has fired.
       option.map(state.next, process.cancel_timer)
-      case connection.with_writable_connection(state.db, refresh_all_ships) {
+      case
+        connection.with_writable_connection(state.db, refresh_all_ships)
+        |> result.flatten()
+      {
         Ok(_) -> {
           logging.log(
             logging.Debug,
