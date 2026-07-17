@@ -35,7 +35,7 @@ import gleam/string
 import gleam/time/duration
 import gleam/time/timestamp
 import logging
-import space_game/database
+import space_game/database/database
 import space_game/discord/api
 import space_game/discord/commands.{
   type SlashCommand, NestedCommand, Subcommand, TopLevelCommand,

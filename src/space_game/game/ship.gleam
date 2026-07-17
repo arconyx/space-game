@@ -16,7 +16,7 @@ import gleam/string
 import gleam/time/duration
 import gleam/time/timestamp.{type Timestamp}
 import logging
-import space_game/database
+import space_game/database/database
 import space_game/game/player
 import space_game/game/waypoints.{type Waypoint}
 import sqlight.{type Connection}
