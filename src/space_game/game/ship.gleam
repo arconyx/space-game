@@ -268,38 +268,6 @@ fn speed(ship: Ship) -> Float {
   ship.speed *. global_speed_multiplier
 }
 
-/// Calculate how far through a trip a ship is.
-/// Returns an error if the ship is docked.
-pub fn calculate_progress(ship: Ship) -> Result(Float, Nil) {
-  case ship {
-    TravellingShip(departed_at:, departed_from:, destination:, ..) -> {
-      let now = timestamp.system_time()
-      let elapsed = timestamp.difference(departed_at, now)
-      let trip_length =
-        waypoints.distance(departed_from, destination)
-        |> travel_time_for_distance(speed(ship))
-      case duration.to_seconds(trip_length) {
-        0.0 -> Ok(1.0)
-        len -> {
-          let elapsed_sec = duration.to_seconds(elapsed)
-          let progress = elapsed_sec /. len
-          logging.log(
-            logging.Debug,
-            "Elapsed time: "
-              <> float.to_string(elapsed_sec)
-              <> "s, trip length: "
-              <> float.to_string(len)
-              <> "s, progress: "
-              <> float.to_string(progress),
-          )
-          Ok(progress)
-        }
-      }
-    }
-    DockedShip(..) -> Error(Nil)
-  }
-}
-
 fn travel_time_for_distance(
   distance: Float,
   speed: Float,
@@ -374,28 +342,66 @@ pub fn set_location(
   |> result.replace(Nil)
 }
 
-fn refresh_ship(conn: Connection, ship: Ship) {
-  case ship, calculate_progress(ship) {
-    TravellingShip(destination:, ..), Ok(p) if p >=. 1.0 ->
-      set_location(conn, ship, destination)
-      |> result.replace(Nil)
-      |> result.replace_error(Nil)
-    _, Ok(_) -> Ok(Nil)
-    _, Error(_) -> Error(Nil)
+/// Calculate how far through a trip a ship is at a given time as a decimal
+/// percentage where >=1 indicates the trip is finished.
+pub fn calculate_progress(
+  current_time now: Timestamp,
+  departed_at start: Timestamp,
+  departed_from origin: Waypoint,
+  destination destination: Waypoint,
+  ship_speed speed: Float,
+) -> Float {
+  let elapsed = timestamp.difference(start, now)
+  let trip_length =
+    waypoints.distance(origin, destination)
+    |> travel_time_for_distance(speed)
+  case duration.to_seconds(trip_length) {
+    0.0 -> 1.0
+    len -> {
+      let elapsed_sec = duration.to_seconds(elapsed)
+      let progress = elapsed_sec /. len
+      logging.log(
+        logging.Debug,
+        "Elapsed time: "
+          <> float.to_string(elapsed_sec)
+          <> "s, trip length: "
+          <> float.to_string(len)
+          <> "s, progress: "
+          <> float.to_string(progress),
+      )
+      progress
+    }
   }
 }
 
 /// Update travel status of all ships
-fn refresh_all_ships(
-  conn: Connection,
-) -> Result(List(Result(Nil, Nil)), sqlight.Error) {
+fn refresh_all_ships(conn: Connection) -> Result(Nil, sqlight.Error) {
   // TODO: This needs optimising
   // We should be using the db to filter and applying all updates in
   // one go
-  use ships <- result.try(select_all_ships(conn))
-  ships
-  |> list.map(refresh_ship(conn, _))
-  |> Ok
+  let now = timestamp.system_time()
+  case select_all_ships(conn) {
+    Ok(ships) ->
+      list.try_each(ships, fn(ship) {
+        case ship {
+          TravellingShip(departed_at:, departed_from:, destination:, ..) ->
+            case
+              calculate_progress(
+                current_time: now,
+                departed_at:,
+                departed_from:,
+                destination:,
+                ship_speed: speed(ship),
+              )
+            {
+              p if p >=. 1.0 -> set_location(conn, ship, destination)
+              _ -> Ok(Nil)
+            }
+          DockedShip(..) -> Ok(Nil)
+        }
+      })
+    Error(e) -> Error(e)
+  }
 }
 
 pub type Message {
@@ -422,7 +428,7 @@ fn handle_message(state: State, msg: Message) -> actor.Next(State, a) {
         connection.with_writable_connection(state.db, refresh_all_ships)
         |> result.flatten()
       {
-        Ok(_) -> {
+        Ok(Nil) -> {
           logging.log(
             logging.Debug,
             "Ships refreshed. Next refresh in "
