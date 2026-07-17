@@ -7,7 +7,7 @@ import gleam/float
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import logging
-import space_game/database/database
+import space_game/database/connection
 import space_game/database/setup
 import sqlight.{type Connection}
 
@@ -111,7 +111,7 @@ pub fn demo_waypoint(db: String) {
     NewWaypoint("Point A", 0.1, 0.3),
     NewWaypoint("Point B", 0.2, 0.1),
   ]
-  use conn <- database.with_writable_connection(db)
+  use conn <- connection.with_writable_connection(db)
   insert_waypoints(conn, waypoints)
 }
 

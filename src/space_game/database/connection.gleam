@@ -90,8 +90,10 @@ pub fn with_writable_connection(
 ///
 /// If an error is returned the entire transaction is rolled back.
 /// This function returns a nested result, where the outer layer is Ok iff
-/// the change was commit/successfully rolled back and the inner layer
+/// the change was committed or successfully rolled back and the inner layer
 /// represents if the supplied transaction function succeeded.
+/// 
+/// TODO: Flatten out result type with a dedicated error type
 pub fn as_transaction(
   conn: Connection,
   transaction: fn() -> Result(a, b),

@@ -16,7 +16,7 @@ import gleam/string
 import gleam/time/duration
 import gleam/time/timestamp.{type Timestamp}
 import logging
-import space_game/database/database
+import space_game/database/connection
 import space_game/database/setup
 import space_game/game/player
 import space_game/game/waypoints.{type Waypoint}
@@ -416,7 +416,7 @@ fn handle_message(state: State, msg: Message) -> actor.Next(State, a) {
       // so we clear the existing timer to maintain spacing.
       // This is a no-op if the timer has fired.
       option.map(state.next, process.cancel_timer)
-      case database.with_writable_connection(state.db, refresh_all_ships) {
+      case connection.with_writable_connection(state.db, refresh_all_ships) {
         Ok(_) -> {
           logging.log(
             logging.Debug,

@@ -8,7 +8,7 @@ import gleam/int
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import logging
-import space_game/database/database
+import space_game/database/connection
 import space_game/database/setup
 import sqlight.{type Connection}
 
@@ -167,7 +167,7 @@ pub fn with_cost(
     // this is the case where they can afford the purchase
     Ok(Some(Player(money:, ..))) -> {
       {
-        use <- database.as_transaction(conn)
+        use <- connection.as_transaction(conn)
         set_funds(conn, player_id, money - cost)
         |> result.try(fn(updated_player) {
           inner(updated_player) |> result.map_error(Generic)

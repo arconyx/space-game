@@ -35,7 +35,7 @@ import gleam/string
 import gleam/time/duration
 import gleam/time/timestamp
 import logging
-import space_game/database/database
+import space_game/database/connection
 import space_game/database/setup
 import space_game/discord/api
 import space_game/discord/commands.{
@@ -233,7 +233,7 @@ fn command_handler(ctx: Context, event: InteractionEvent) {
 fn handle_registration(ctx: Context, event: InteractionEvent) {
   use <- interactions.with_response(ctx.bot, event)
   // The return value of this block is used as the response
-  use conn <- database.with_writable_connection(ctx.db)
+  use conn <- connection.with_writable_connection(ctx.db)
   let user = event.user
   case player.select_player(conn, user.id) {
     Ok(Some(_)) ->
@@ -277,7 +277,7 @@ fn handle_registration(ctx: Context, event: InteractionEvent) {
 fn handle_balance_check(ctx: Context, event: InteractionEvent) {
   use <- interactions.with_response(ctx.bot, event)
   let user = event.user
-  use conn <- database.with_readonly_connection(ctx.db)
+  use conn <- connection.with_readonly_connection(ctx.db)
   case player.select_player(conn, user.id) {
     Ok(Some(player)) ->
       StandaloneResponse(
@@ -308,7 +308,7 @@ fn handle_ship_purchase(ctx: Context, event: InteractionEvent) {
   // giving us 15 minutes to response instead of a few seconds.
   use <- interactions.defer_response(ctx.bot, event, ephemeral: False)
   let user = event.user
-  use conn <- database.with_writable_connection(ctx.db)
+  use conn <- connection.with_writable_connection(ctx.db)
   case { waypoints.select_all_waypoints(conn) |> result.map(list.shuffle) } {
     Ok([]) -> ResponseUpdate("There are no waypoints to place your ship at")
     Ok([location, ..]) -> {
@@ -426,7 +426,7 @@ fn waypoint_to_string(waypoint: waypoints.Waypoint, ship: ship.Ship) -> String {
 /// Print a list of waypoints with travel time information
 fn handle_list_waypoints(ctx: Context, event: InteractionEvent) {
   use <- interactions.defer_response(ctx.bot, event, True)
-  use conn <- database.with_readonly_connection(ctx.db)
+  use conn <- connection.with_readonly_connection(ctx.db)
   // Get a player's ships, if they have any.
   // This command works even for unregistered players and players without ships
   // so we do special handling for the absence of ships.
@@ -482,7 +482,7 @@ fn handle_list_waypoints(ctx: Context, event: InteractionEvent) {
 pub fn handle_travel_start(ctx: Context, event: InteractionEvent) {
   use <- interactions.defer_response(ctx.bot, event, True)
   let user = event.user
-  use conn <- database.with_writable_connection(ctx.db)
+  use conn <- connection.with_writable_connection(ctx.db)
   // TODO: Better option handling
   let assert Ok(interactions.ValueStr(name)) =
     event.options |> dict.get("destination")
