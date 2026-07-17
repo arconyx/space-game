@@ -44,10 +44,10 @@ import space_game/discord/gateway
 import space_game/discord/interactions.{
   type InteractionEvent, ResponseUpdate, StandaloneResponse,
 }
-import space_game/goods
-import space_game/player
-import space_game/ship
-import space_game/waypoints
+import space_game/game/goods
+import space_game/game/player
+import space_game/game/ship
+import space_game/game/waypoints
 import sqlight
 
 /// The context holds immutable global state

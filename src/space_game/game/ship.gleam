@@ -17,8 +17,8 @@ import gleam/time/duration
 import gleam/time/timestamp.{type Timestamp}
 import logging
 import space_game/database
-import space_game/player
-import space_game/waypoints.{type Waypoint}
+import space_game/game/player
+import space_game/game/waypoints.{type Waypoint}
 import sqlight.{type Connection}
 
 pub const table = "ships"
