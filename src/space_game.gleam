@@ -36,6 +36,7 @@ import gleam/time/duration
 import gleam/time/timestamp
 import logging
 import space_game/database/database
+import space_game/database/setup
 import space_game/discord/api
 import space_game/discord/commands.{
   type SlashCommand, NestedCommand, Subcommand, TopLevelCommand,
@@ -83,7 +84,7 @@ pub fn main() -> Nil {
       ship_refresh_actor: process.new_name("ships"),
     )
 
-  case database.init_database(database_path, define_tables) {
+  case setup.init_database(database_path, define_tables) {
     Ok(Nil) -> logging.log(logging.Debug, "Database initialised")
     Error(e) ->
       panic as { "Unable to initalise database: " <> string.inspect(e) }

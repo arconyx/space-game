@@ -8,6 +8,7 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import logging
 import space_game/database/database
+import space_game/database/setup
 import sqlight.{type Connection}
 
 pub const table = "waypoints"
@@ -26,19 +27,19 @@ type NewWaypoint {
 /// The (x,y) pair must also be unique as no two waypoints
 /// can share the same position.
 pub fn create_waypoints_table(conn: Connection) -> Result(Nil, sqlight.Error) {
-  database.create_table(
+  setup.create_table(
     conn,
     table,
-    database.integer_primary_key,
+    setup.integer_primary_key,
     [
-      database.Column(
+      setup.Column(
         name: "name",
-        datatype: database.Text,
+        datatype: setup.Text,
         nullable: False,
         constraints: "UNIQUE CHECK(name != '')",
       ),
-      database.simple_col("x", database.Real),
-      database.simple_col("y", database.Real),
+      setup.simple_col("x", setup.Real),
+      setup.simple_col("y", setup.Real),
     ],
     "UNIQUE(x, y)",
   )

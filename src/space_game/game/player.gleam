@@ -9,6 +9,7 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import logging
 import space_game/database/database
+import space_game/database/setup
 import sqlight.{type Connection}
 
 pub const table = "players"
@@ -24,12 +25,12 @@ pub type Player {
 
 /// Table has an String primary key associated with the Discord user id and an integer `money` field.
 pub fn create_players_table(conn: Connection) -> Result(Nil, sqlight.Error) {
-  database.create_table(
+  setup.create_table(
     conn,
     table,
-    database.string_primary_key("discord_id"),
+    setup.string_primary_key("discord_id"),
     [
-      database.simple_col("money", database.Integer),
+      setup.simple_col("money", setup.Integer),
     ],
     "",
   )

@@ -17,6 +17,7 @@ import gleam/time/duration
 import gleam/time/timestamp.{type Timestamp}
 import logging
 import space_game/database/database
+import space_game/database/setup
 import space_game/game/player
 import space_game/game/waypoints.{type Waypoint}
 import sqlight.{type Connection}
@@ -48,43 +49,43 @@ pub type Ship {
 }
 
 pub fn create_ships_table(conn: Connection) -> Result(Nil, sqlight.Error) {
-  database.create_table(
+  setup.create_table(
     conn,
     table,
-    database.integer_primary_key,
+    setup.integer_primary_key,
     [
-      database.Column(
+      setup.Column(
         name: "name",
-        datatype: database.Text,
+        datatype: setup.Text,
         nullable: False,
         constraints: "UNIQUE CHECK(name != '')",
       ),
-      database.Column(
+      setup.Column(
         name: "owner_id",
-        datatype: database.Text,
+        datatype: setup.Text,
         nullable: False,
         constraints: "CHECK(owner_id != '')",
       ),
-      database.simple_col("cargo_capacity", database.Integer),
-      database.Column(
+      setup.simple_col("cargo_capacity", setup.Integer),
+      setup.Column(
         name: "speed",
-        datatype: database.Real,
+        datatype: setup.Real,
         nullable: False,
         constraints: "CHECK(speed > 0)",
       ),
-      database.simple_col("location_id", database.Integer),
+      setup.simple_col("location_id", setup.Integer),
       // if the destination is non-null then we must have a departure time
       // if the destination is null then we're docked
-      database.Column(
+      setup.Column(
         name: "destination_id",
-        datatype: database.Integer,
+        datatype: setup.Integer,
         nullable: True,
         constraints: "",
       ),
       // epoch seconds
-      database.Column(
+      setup.Column(
         name: "departed_at",
-        datatype: database.Integer,
+        datatype: setup.Integer,
         nullable: True,
         constraints: "",
       ),
