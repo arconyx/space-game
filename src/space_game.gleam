@@ -135,7 +135,7 @@ pub fn main() -> Nil {
 }
 
 /// Declare database tables
-fn define_tables(conn: sqlight.Connection) {
+fn define_tables(conn: sqlight.Connection) -> Result(Nil, sqlight.Error) {
   use _ <- result.try(waypoints.create_waypoints_table(conn))
   use _ <- result.try(player.create_players_table(conn))
   ship.create_ships_table(conn)
@@ -210,7 +210,7 @@ fn define_commands() -> List(SlashCommand) {
 }
 
 /// Route commands to handler functions
-fn command_handler(ctx: Context, event: InteractionEvent) {
+fn command_handler(ctx: Context, event: InteractionEvent) -> Nil {
   case event {
     // Handle /commands
     // This is future proofing against supporting more command types
@@ -264,7 +264,7 @@ fn catch_deferred_database_error(
 }
 
 /// Register a new player
-fn handle_registration(ctx: Context, event: InteractionEvent) {
+fn handle_registration(ctx: Context, event: InteractionEvent) -> Nil {
   use <- interactions.with_response(ctx.bot, event)
   // The return value of this block is used as the response
   use <- catch_database_error()
@@ -309,7 +309,7 @@ fn handle_registration(ctx: Context, event: InteractionEvent) {
 }
 
 /// Print the user's account balance
-fn handle_balance_check(ctx: Context, event: InteractionEvent) {
+fn handle_balance_check(ctx: Context, event: InteractionEvent) -> Nil {
   use <- interactions.with_response(ctx.bot, event)
   let user = event.user
   use <- catch_database_error()
@@ -339,7 +339,7 @@ fn handle_balance_check(ctx: Context, event: InteractionEvent) {
   }
 }
 
-fn handle_ship_purchase(ctx: Context, event: InteractionEvent) {
+fn handle_ship_purchase(ctx: Context, event: InteractionEvent) -> Nil {
   // Deferring the response displays a "bot is thinking" message
   // giving us 15 minutes to response instead of a few seconds.
   use <- interactions.defer_response(ctx.bot, event, ephemeral: False)
@@ -461,7 +461,7 @@ fn waypoint_to_string(waypoint: waypoints.Waypoint, ship: ship.Ship) -> String {
 }
 
 /// Print a list of waypoints with travel time information
-fn handle_list_waypoints(ctx: Context, event: InteractionEvent) {
+fn handle_list_waypoints(ctx: Context, event: InteractionEvent) -> Nil {
   use <- interactions.defer_response(ctx.bot, event, True)
   use <- catch_deferred_database_error()
   use conn <- connection.with_readonly_connection(ctx.db)
@@ -517,7 +517,7 @@ fn handle_list_waypoints(ctx: Context, event: InteractionEvent) {
 }
 
 /// Tell a ship to fly to a waypoint.
-pub fn handle_travel_start(ctx: Context, event: InteractionEvent) {
+pub fn handle_travel_start(ctx: Context, event: InteractionEvent) -> Nil {
   use <- interactions.defer_response(ctx.bot, event, True)
   let user = event.user
   use <- catch_deferred_database_error()
