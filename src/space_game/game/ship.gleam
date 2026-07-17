@@ -1,4 +1,6 @@
 import cake/adapter/sqlite
+import cake/combined
+import cake/delete
 import cake/insert
 import cake/join
 import cake/select
@@ -22,10 +24,10 @@ import space_game/game/player
 import space_game/game/waypoints.{type Waypoint}
 import sqlight.{type Connection}
 
-pub const table = "ships"
+pub const table: String = "ships"
 
 // intended for debugging use by increasing travel times
-const global_speed_multiplier = 1.0
+const global_speed_multiplier: Float = 1.0
 
 pub type Ship {
   DockedShip(
@@ -209,7 +211,7 @@ fn prefix_columns(strings: List(String), prefix: String) -> List(String) {
   prefix <> s
 }
 
-fn make_join(left_col: String, alias: String) {
+fn make_join(left_col: String, alias: String) -> delete.Join {
   join.table(waypoints.table)
   |> join.left(
     where.col(table <> left_col)
@@ -218,7 +220,7 @@ fn make_join(left_col: String, alias: String) {
   )
 }
 
-fn make_select() {
+fn make_select() -> combined.Select {
   select.new()
   |> select.from_table(table)
   |> select.select_cols(
