@@ -4,26 +4,42 @@ import gleam/float
 import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
+import gleam/otp/actor
 import gleam/result
 import gleam/string
 import gleam/time/duration
 import gleam/time/timestamp
 import logging
-import space_game/context.{type Context}
 import space_game/database/connection
+import space_game/database/write
+import space_game/discord/api
 import space_game/discord/commands.{
   type SlashCommand, NestedCommand, Subcommand, TopLevelCommand,
 }
 import space_game/discord/interactions.{
   type InteractionEvent, ResponseUpdate, StandaloneResponse,
 }
+import space_game/game/goods
 import space_game/game/player
 import space_game/game/ship
 import space_game/game/waypoints
 import sqlight
 
-/// This function just splits out the command definitons from the
-/// main method for readability
+pub type Message {
+  Interaction(InteractionEvent)
+}
+
+type State {
+  State(
+    user_id: String,
+    bot: api.Bot,
+    db: String,
+    writer: process.Subject(write.Message),
+    ship_refresh_actor: process.Subject(ship.Message),
+    goods: dict.Dict(String, goods.Goods),
+  )
+}
+
 /// TODO: Embed handlers in command objects and automatically generate
 /// router from command list
 pub fn define_commands() -> List(SlashCommand) {
@@ -90,8 +106,30 @@ pub fn define_commands() -> List(SlashCommand) {
   ]
 }
 
+pub fn make_user_actor(
+  bot: api.Bot,
+  db: String,
+  writer: process.Subject(write.Message),
+  ship_refresh_actor: process.Subject(ship.Message),
+  goods: dict.Dict(String, goods.Goods),
+) {
+  fn(user_id: String) {
+    let a =
+      State(user_id:, bot:, db:, writer:, ship_refresh_actor:, goods:)
+      |> actor.new()
+      |> actor.on_message(command_handler)
+      |> actor.start()
+    logging.log(logging.Debug, "Started actor for user " <> user_id)
+    a
+  }
+}
+
 /// Route commands to handler functions
-pub fn command_handler(ctx: Context, event: InteractionEvent) -> Nil {
+fn command_handler(
+  state: State,
+  message: Message,
+) -> actor.Next(State, Message) {
+  let Interaction(event) = message
   case event {
     // Handle /commands
     // This is future proofing against supporting more command types
@@ -99,15 +137,16 @@ pub fn command_handler(ctx: Context, event: InteractionEvent) -> Nil {
       // Select a handler by matching on the command
       //  which is a list `["root", "sub1", "sub2", ...]`
       case command {
-        ["account", "register"] -> handle_registration(ctx, event)
-        ["account", "balance"] -> handle_balance_check(ctx, event)
-        ["ship", "buy"] -> handle_ship_purchase(ctx, event)
-        ["ship", "travel"] -> handle_travel_start(ctx, event)
-        ["waypoints"] -> handle_list_waypoints(ctx, event)
+        ["account", "register"] -> handle_registration(state, event)
+        ["account", "balance"] -> handle_balance_check(state, event)
+        ["ship", "buy"] -> handle_ship_purchase(state, event)
+        ["ship", "travel"] -> handle_travel_start(state, event)
+        ["waypoints"] -> handle_list_waypoints(state, event)
         [] -> logging.log(logging.Warning, "Empty command string")
         _ -> logging.log(logging.Warning, "Unhandled command")
       }
   }
+  actor.continue(state)
 }
 
 /// If the result is an error log it and return a generic error message
@@ -145,56 +184,58 @@ fn catch_deferred_database_error(
 }
 
 /// Register a new player
-fn handle_registration(ctx: Context, event: InteractionEvent) -> Nil {
-  use <- interactions.with_response(ctx.bot, event)
-  // The return value of this block is used as the response
-  use <- catch_database_error()
-  use conn <- connection.with_writable_connection(ctx.db)
-  let user = event.user
-  case player.select_player(conn, user.id) {
-    Ok(Some(_)) ->
-      StandaloneResponse("You are already a registered trader.", True)
-    Ok(None) ->
-      case player.insert_players(conn, [player.Player(user.id, 100_000)]) {
-        Ok(_) ->
-          StandaloneResponse(
-            "Welcome to the Trader's Guild " <> user.name <> "!",
-            False,
-          )
+fn handle_registration(state: State, event: InteractionEvent) -> Nil {
+  use conn <- write.call_writer(state.writer)
+  // TODO: Don't just blindly ok
+  Ok(
+    interactions.with_response(state.bot, event, fn() {
+      let user = event.user
+      case player.select_player(conn, user.id) {
+        Ok(Some(_)) ->
+          StandaloneResponse("You are already a registered trader.", True)
+        Ok(None) ->
+          case player.insert_players(conn, [player.Player(user.id, 100_000)]) {
+            Ok(_) ->
+              StandaloneResponse(
+                "Welcome to the Trader's Guild " <> user.name <> "!",
+                False,
+              )
+            Error(e) -> {
+              logging.log(
+                logging.Error,
+                "Unable to register new player:\n" <> string.inspect(e),
+              )
+              StandaloneResponse(
+                "We apologise "
+                  <> user.name
+                  <> ", but our registration software is broken right now.",
+                True,
+              )
+            }
+          }
         Error(e) -> {
           logging.log(
             logging.Error,
-            "Unable to register new player:\n" <> string.inspect(e),
+            "Unable to read player list:\n" <> string.inspect(e),
           )
           StandaloneResponse(
-            "We apologise "
+            "Sorry "
               <> user.name
-              <> ", but our registration software is broken right now.",
+              <> ", but we can't check the registered traders list right now.",
             True,
           )
         }
       }
-    Error(e) -> {
-      logging.log(
-        logging.Error,
-        "Unable to read player list:\n" <> string.inspect(e),
-      )
-      StandaloneResponse(
-        "Sorry "
-          <> user.name
-          <> ", but we can't check the registered traders list right now.",
-        True,
-      )
-    }
-  }
+    }),
+  )
 }
 
 /// Print the user's account balance
-fn handle_balance_check(ctx: Context, event: InteractionEvent) -> Nil {
-  use <- interactions.with_response(ctx.bot, event)
+fn handle_balance_check(state: State, event: InteractionEvent) -> Nil {
+  use <- interactions.with_response(state.bot, event)
   let user = event.user
   use <- catch_database_error()
-  use conn <- connection.with_readonly_connection(ctx.db)
+  use conn <- connection.with_readonly_connection(state.db)
   case player.select_player(conn, user.id) {
     Ok(Some(player)) ->
       StandaloneResponse(
@@ -220,15 +261,15 @@ fn handle_balance_check(ctx: Context, event: InteractionEvent) -> Nil {
   }
 }
 
-fn handle_ship_purchase(ctx: Context, event: InteractionEvent) -> Nil {
+fn handle_ship_purchase(state: State, event: InteractionEvent) -> Nil {
   // Deferring the response displays a "bot is thinking" message
   // giving us 15 minutes to response instead of a few seconds.
   // TODO: Handle deferral error
-  let _ = interactions.send_deferral(ctx.bot, event, False)
-  let followup = interactions.edit_response(ctx.bot, event, _)
+  let _ = interactions.send_deferral(state.bot, event, False)
+  let followup = interactions.edit_response(state.bot, event, _)
 
   use conn, player <- player.with_cost(
-    ctx.writer,
+    state.writer,
     event.user.id,
     60_000,
     fn(error) {
@@ -368,10 +409,10 @@ fn waypoint_to_string(waypoint: waypoints.Waypoint, ship: ship.Ship) -> String {
 }
 
 /// Print a list of waypoints with travel time information
-fn handle_list_waypoints(ctx: Context, event: InteractionEvent) -> Nil {
-  use <- interactions.defer_response(ctx.bot, event, True)
+fn handle_list_waypoints(state: State, event: InteractionEvent) -> Nil {
+  use <- interactions.defer_response(state.bot, event, True)
   use <- catch_deferred_database_error()
-  use conn <- connection.with_readonly_connection(ctx.db)
+  use conn <- connection.with_readonly_connection(state.db)
   // Get a player's ships, if they have any.
   // This command works even for unregistered players and players without ships
   // so we do special handling for the absence of ships.
@@ -424,11 +465,11 @@ fn handle_list_waypoints(ctx: Context, event: InteractionEvent) -> Nil {
 }
 
 /// Tell a ship to fly to a waypoint.
-pub fn handle_travel_start(ctx: Context, event: InteractionEvent) -> Nil {
-  use <- interactions.defer_response(ctx.bot, event, True)
+fn handle_travel_start(state: State, event: InteractionEvent) -> Nil {
+  use <- interactions.defer_response(state.bot, event, True)
   let user = event.user
   use <- catch_deferred_database_error()
-  use conn <- connection.with_writable_connection(ctx.db)
+  use conn <- connection.with_writable_connection(state.db)
   // TODO: Better option handling
   let assert Ok(interactions.ValueStr(name)) =
     event.options |> dict.get("destination")
@@ -449,7 +490,7 @@ pub fn handle_travel_start(ctx: Context, event: InteractionEvent) -> Nil {
           // Start a background process responsible for updating flight status
           // on arrival
           process.send_after(
-            ctx.ship_refresh_actor,
+            state.ship_refresh_actor,
             duration.to_seconds(time) *. 1000.0 +. 100.0
               |> float.ceiling
               |> float.truncate,

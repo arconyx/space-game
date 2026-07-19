@@ -23,17 +23,19 @@
 
 import envoy
 import gleam/erlang/process
+import gleam/otp/actor
 import gleam/otp/static_supervisor
 import gleam/otp/supervision
 import gleam/result
 import gleam/string
 import logging
-import space_game/context
+import reki
 import space_game/database/setup
 import space_game/database/write
 import space_game/discord/api
 import space_game/discord/commands
 import space_game/discord/gateway
+import space_game/discord/interactions
 import space_game/game
 import space_game/game/goods
 import space_game/game/player
@@ -55,16 +57,18 @@ pub fn main() -> Nil {
   let assert Ok(discord_token) = envoy.get("SPACE_GAME_DISCORD_TOKEN")
   let assert Ok(guild_id) = envoy.get("SPACE_GAME_TEST_GUILD_ID")
 
-  let ship_refresh_name = process.new_name("ships")
-  let db_writer_name = process.new_name("writer")
+  let ship_refresh_name: process.Name(ship.Message) = process.new_name("ships")
+  let db_writer_name: process.Name(write.Message) = process.new_name("writer")
 
-  let ctx =
-    context.Context(
-      bot: api.new(id: discord_id, token: discord_token),
-      db: database_path,
-      goods: goods.goods_dict(goods.all_goods),
-      ship_refresh_actor: process.named_subject(ship_refresh_name),
-      writer: process.named_subject(db_writer_name),
+  let bot = api.new(id: discord_id, token: discord_token)
+
+  let user_process_template =
+    game.make_user_actor(
+      bot,
+      database_path,
+      process.named_subject(db_writer_name),
+      process.named_subject(ship_refresh_name),
+      goods.goods_dict(goods.all_goods),
     )
 
   case setup.init_database(database_path, define_tables) {
@@ -73,15 +77,22 @@ pub fn main() -> Nil {
       panic as { "Unable to initalise database: " <> string.inspect(e) }
   }
 
+  let registry = reki.new()
+
   let assert Ok(bot_worker_spec) =
-    gateway.create_bot_spec(discord_token, fn(event) {
-      // embedding the context + bot with a closure
-      game.command_handler(ctx, event)
-    })
+    gateway.create_bot_spec(discord_token, input_router(
+      _,
+      registry,
+      user_process_template,
+    ))
 
   let assert Ok(_) =
     static_supervisor.new(static_supervisor.OneForOne)
-    |> static_supervisor.add(bot_worker_spec)
+    |> static_supervisor.add(
+      supervision.worker(fn() {
+        write.create_writer(db_writer_name, database_path)
+      }),
+    )
     |> static_supervisor.add(
       supervision.worker(ship.make_ship_worker(
         ship_refresh_name,
@@ -89,16 +100,15 @@ pub fn main() -> Nil {
         6 * 60 * 1000,
       )),
     )
-    |> static_supervisor.add(
-      supervision.worker(fn() { write.create_writer(db_writer_name, ctx.db) }),
-    )
+    |> static_supervisor.add(reki.supervised(registry))
+    |> static_supervisor.add(bot_worker_spec)
     |> static_supervisor.start()
 
   // Normally we'd register global commands but for testing 
   // we're using guild args because they update faster and
   // don't have a quota
   let assert Ok(_) =
-    commands.register_global_commands(ctx.bot, [])
+    commands.register_global_commands(bot, [])
     |> result.map_error(fn(e) {
       "Unable to register global commands due to error:\n"
       <> api.error_to_string(e)
@@ -106,7 +116,7 @@ pub fn main() -> Nil {
   logging.log(logging.Debug, "Global commands registered")
 
   let assert Ok(_) =
-    commands.register_guild_commands(ctx.bot, guild_id, game.define_commands())
+    commands.register_guild_commands(bot, guild_id, game.define_commands())
     |> result.map_error(fn(e) {
       "Unable to register guild commands for guild "
       <> guild_id
@@ -115,7 +125,7 @@ pub fn main() -> Nil {
     })
   logging.log(logging.Debug, "Guild commands registered for guild " <> guild_id)
 
-  let _ = waypoints.demo_waypoint(ctx.db)
+  let _ = waypoints.demo_waypoint(database_path)
 
   process.sleep_forever()
 }
@@ -125,4 +135,17 @@ fn define_tables(conn: sqlight.Connection) -> Result(Nil, sqlight.Error) {
   use _ <- result.try(waypoints.create_waypoints_table(conn))
   use _ <- result.try(player.create_players_table(conn))
   ship.create_ships_table(conn)
+}
+
+fn input_router(
+  event: interactions.InteractionEvent,
+  registry: reki.Registry(String, game.Message),
+  template: fn(String) ->
+    Result(actor.Started(process.Subject(game.Message)), actor.StartError),
+) -> Nil {
+  // TODO: Handle errors
+  let _ =
+    reki.lookup_or_start(registry, event.user.id, template)
+    |> result.map(fn(subject) { process.send(subject, game.Interaction(event)) })
+  Nil
 }
