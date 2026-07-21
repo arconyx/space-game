@@ -446,7 +446,7 @@ pub type StandaloneResponse {
 }
 
 /// Send a response to the user
-fn send_response(
+pub fn send_response(
   bot: Bot,
   event: InteractionEvent,
   response: StandaloneResponse,

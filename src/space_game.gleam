@@ -23,24 +23,16 @@
 
 import envoy
 import gleam/erlang/process
-import gleam/otp/actor
 import gleam/otp/static_supervisor
 import gleam/otp/supervision
 import gleam/result
-import gleam/string
 import logging
 import reki
-import space_game/database/setup
-import space_game/database/write
 import space_game/discord/api
 import space_game/discord/commands
 import space_game/discord/gateway
-import space_game/discord/interactions
 import space_game/game
-import space_game/game/player
-import space_game/game/ship
-import space_game/game/waypoints
-import sqlight
+import space_game/storage
 
 /// Main entry point
 /// This is what `gleam run` calls
@@ -49,54 +41,32 @@ pub fn main() -> Nil {
   logging.set_level(logging.Debug)
 
   // Load configuration from environment. Most panic if we can't read them
-  let database_path =
-    envoy.get("SPACE_GAME_DATABASE_PATH")
-    |> result.unwrap("space-game.sqlite3")
+  let storage_path =
+    envoy.get("SPACE_GAME_STORAGE_PATH")
+    |> result.unwrap(".storail")
   let assert Ok(discord_id) = envoy.get("SPACE_GAME_DISCORD_APP_ID")
   let assert Ok(discord_token) = envoy.get("SPACE_GAME_DISCORD_TOKEN")
   let assert Ok(guild_id) = envoy.get("SPACE_GAME_TEST_GUILD_ID")
 
-  let ship_refresh_name: process.Name(ship.Message) = process.new_name("ships")
-  let db_writer_name: process.Name(write.Message) = process.new_name("writer")
+  let writer_name: process.Name(storage.Message) = process.new_name("writer")
 
   let bot = api.new(id: discord_id, token: discord_token)
-
-  let user_process_template =
-    game.make_user_actor(
-      bot,
-      database_path,
-      process.named_subject(db_writer_name),
-      process.named_subject(ship_refresh_name),
-    )
-
-  case setup.init_database(database_path, define_tables) {
-    Ok(Nil) -> logging.log(logging.Debug, "Database initialised")
-    Error(e) ->
-      panic as { "Unable to initalise database: " <> string.inspect(e) }
-  }
+  let storage = storage.new_storage(storage_path)
 
   let registry = reki.new()
-
   let assert Ok(bot_worker_spec) =
-    gateway.create_bot_spec(discord_token, input_router(
+    gateway.create_bot_spec(discord_token, game.input_router(
       _,
       registry,
-      user_process_template,
+      bot,
+      storage,
+      writer_name |> process.named_subject,
     ))
 
   let assert Ok(_) =
     static_supervisor.new(static_supervisor.OneForOne)
     |> static_supervisor.add(
-      supervision.worker(fn() {
-        write.create_writer(db_writer_name, database_path)
-      }),
-    )
-    |> static_supervisor.add(
-      supervision.worker(ship.make_ship_worker(
-        ship_refresh_name,
-        db_writer_name,
-        6 * 60 * 1000,
-      )),
+      supervision.worker(fn() { storage.writer(writer_name, storage) }),
     )
     |> static_supervisor.add(reki.supervised(registry))
     |> static_supervisor.add(bot_worker_spec)
@@ -123,27 +93,5 @@ pub fn main() -> Nil {
     })
   logging.log(logging.Debug, "Guild commands registered for guild " <> guild_id)
 
-  let _ = waypoints.demo_waypoint(database_path)
-
   process.sleep_forever()
-}
-
-/// Declare database tables
-fn define_tables(conn: sqlight.Connection) -> Result(Nil, sqlight.Error) {
-  use _ <- result.try(waypoints.create_waypoints_table(conn))
-  use _ <- result.try(player.create_players_table(conn))
-  ship.create_ships_table(conn)
-}
-
-fn input_router(
-  event: interactions.InteractionEvent,
-  registry: reki.Registry(String, game.Message),
-  template: fn(String) ->
-    Result(actor.Started(process.Subject(game.Message)), actor.StartError),
-) -> Nil {
-  // TODO: Handle errors
-  let _ =
-    reki.lookup_or_start(registry, event.user.id, template)
-    |> result.map(fn(subject) { process.send(subject, game.Interaction(event)) })
-  Nil
 }

@@ -15,6 +15,7 @@ import gleam/json.{type Json}
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
+import gleam/uri
 import logging
 import space_game/utils/debug
 
@@ -155,27 +156,33 @@ pub type Error {
 /// If you are expecting a response back, `send_and_decode` is recommended
 /// for convenient decoding.
 pub fn send(req: Request(String)) -> Result(Response(String), Error) {
-  use resp <- result.try(hackney.send(req) |> result.map_error(Transmission))
-  case resp.status {
-    200 | 201 | 204 | 304 -> resp |> Ok
-    400 -> BadRequest |> Error
-    401 -> Unauthorised |> Error
-    403 -> Forbidden |> Error
-    404 -> NotFound |> Error
-    405 -> MethodNotAllowed |> Error
-    429 -> TooManyRequests |> Error
-    502 -> GatewayUnavailable |> Error
-    c if 499 < c && c < 600 -> ServerError(c) |> Error
-    c if 199 < c && c < 300 -> {
-      logging.log(
-        logging.Warning,
-        "Got unexpected success code " <> int.to_string(c) <> " for request",
-      )
-      resp |> Ok
+  result.try(hackney.send(req) |> result.map_error(Transmission), fn(resp) {
+    case resp.status {
+      200 | 201 | 204 | 304 -> resp |> Ok
+      400 -> BadRequest |> Error
+      401 -> Unauthorised |> Error
+      403 -> Forbidden |> Error
+      404 -> NotFound |> Error
+      405 -> MethodNotAllowed |> Error
+      429 -> TooManyRequests |> Error
+      502 -> GatewayUnavailable |> Error
+      c if 499 < c && c < 600 -> ServerError(c) |> Error
+      c if 199 < c && c < 300 -> {
+        logging.log(
+          logging.Warning,
+          "Got unexpected success code " <> int.to_string(c) <> " for request",
+        )
+        resp |> Ok
+      }
+      c -> Unrecognised(c) |> Error
     }
-    c -> Unrecognised(c) |> Error
-  }
-  |> result.map_error(ResponseCode)
+    |> result.map_error(ResponseCode)
+  })
+  |> debug.log_error(
+    logging.Error,
+    "Sending API request to " <> uri.to_string(request.to_uri(req)) <> "failed.",
+    string.inspect,
+  )
 }
 
 /// Send a request to the server then decode the JSON response body

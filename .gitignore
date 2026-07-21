@@ -8,3 +8,4 @@ erl_crash.dump
 *.sqlite3
 *.sqlite3-*
 .vscode/
+.storail/
