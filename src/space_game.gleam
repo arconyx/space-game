@@ -37,7 +37,6 @@ import space_game/discord/commands
 import space_game/discord/gateway
 import space_game/discord/interactions
 import space_game/game
-import space_game/game/goods
 import space_game/game/player
 import space_game/game/ship
 import space_game/game/waypoints
@@ -68,7 +67,6 @@ pub fn main() -> Nil {
       database_path,
       process.named_subject(db_writer_name),
       process.named_subject(ship_refresh_name),
-      goods.goods_dict(goods.all_goods),
     )
 
   case setup.init_database(database_path, define_tables) {

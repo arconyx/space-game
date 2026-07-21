@@ -19,7 +19,6 @@ import space_game/discord/commands.{
 import space_game/discord/interactions.{
   type InteractionEvent, ResponseUpdate, StandaloneResponse,
 }
-import space_game/game/goods
 import space_game/game/player
 import space_game/game/ship
 import space_game/game/waypoints
@@ -36,7 +35,6 @@ type State {
     db: String,
     writer: process.Subject(write.Message),
     ship_refresh_actor: process.Subject(ship.Message),
-    goods: dict.Dict(String, goods.Goods),
   )
 }
 
@@ -111,11 +109,10 @@ pub fn make_user_actor(
   db: String,
   writer: process.Subject(write.Message),
   ship_refresh_actor: process.Subject(ship.Message),
-  goods: dict.Dict(String, goods.Goods),
 ) {
   fn(user_id: String) {
     let a =
-      State(user_id:, bot:, db:, writer:, ship_refresh_actor:, goods:)
+      State(user_id:, bot:, db:, writer:, ship_refresh_actor:)
       |> actor.new()
       |> actor.on_message(command_handler)
       |> actor.start()
